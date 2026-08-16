@@ -1,0 +1,46 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+
+jobs:
+  build-apk:
+    name: Build Flutter APK
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Get the GitHub repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Install Flutter
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      # 3. Check Flutter installation
+      - name: Flutter version
+        run: flutter --version
+
+      # 4. Install dependencies
+      - name: Get Flutter dependencies
+        working-directory: assetflow_mobile
+        run: flutter pub get
+
+      # 5. Build release APK
+      - name: Build APK
+        working-directory: assetflow_mobile
+        run: flutter build apk --release
+
+      # 6. Upload APK to GitHub Actions
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AssetFlow-APK
+          path: assetflow_mobile/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
