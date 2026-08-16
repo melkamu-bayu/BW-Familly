@@ -25,7 +25,7 @@ docker compose exec api python -m app.seed
 
 API is now live at `http://localhost:8000`. Interactive docs: `http://localhost:8000/docs`.
 
-Seeded login: `admin@assetflow.local` / `ChangeMe123!` — **change this immediately**, it's a dev-only default.
+Seeded login: `admin@assetflow.app` / `ChangeMe123!` — **change this immediately**, it's a dev-only default.
 
 ## Quick start (local, no Docker)
 
@@ -90,7 +90,7 @@ alembic/         migrations (0001_initial_schema creates every core table)
 # 1. Log in
 curl -X POST localhost:8000/api/v1/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"email":"admin@assetflow.local","password":"ChangeMe123!"}'
+  -d '{"email":"admin@assetflow.app","password":"ChangeMe123!"}'
 
 # 2. Use the access_token from the response as a Bearer token to, e.g., list accounts
 curl localhost:8000/api/v1/accounts -H "Authorization: Bearer <access_token>"

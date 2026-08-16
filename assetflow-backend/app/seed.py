@@ -84,11 +84,11 @@ def seed(db: Session) -> None:
                 db.add(Permission(role_id=roles[role_name].id, resource=resource, action=action))
 
     # --- Admin user ---
-    admin = db.query(User).filter(User.email == "admin@assetflow.local").one_or_none()
+    admin = db.query(User).filter(User.email == "admin@assetflow.app").one_or_none()
     if admin is None:
         admin = User(
             full_name="System Administrator",
-            email="admin@assetflow.local",
+            email="admin@assetflow.app",
             password_hash=hash_password("ChangeMe123!"),
             role_id=roles["super_admin"].id,
         )
@@ -150,7 +150,7 @@ def seed(db: Session) -> None:
 
     db.commit()
     print("Seed complete.")
-    print("Admin login: admin@assetflow.local / ChangeMe123!  (change immediately in production)")
+    print("Admin login: admin@assetflow.app / ChangeMe123!  (change immediately in production)")
 
 
 if __name__ == "__main__":
