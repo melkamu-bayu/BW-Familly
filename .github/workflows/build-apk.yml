@@ -10,13 +10,17 @@ jobs:
   build-apk:
     runs-on: ubuntu-latest
 
-    defaults:
-      run:
-        working-directory: mobile
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Show repository structure
+        run: |
+          echo "Current directory:"
+          pwd
+          echo ""
+          echo "Repository files:"
+          find . -maxdepth 3 -type f | sort | head -300
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -34,10 +38,15 @@ jobs:
       - name: Check Flutter
         run: flutter --version
 
+      - name: Find Flutter project
+        run: |
+          echo "Searching for pubspec.yaml..."
+          find . -name pubspec.yaml -print
+
       - name: Get dependencies
         run: flutter pub get
 
-      - name: Build Release APK
+      - name: Build APK
         run: |
           flutter build apk --release \
             --dart-define=API_BASE_URL=https://assetflow-api-f435.onrender.com/api/v1
@@ -46,4 +55,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: assetflow-release-apk
-          path: mobile/build/app/outputs/flutter-apk/app-release.apk
+          path: '**/build/app/outputs/flutter-apk/app-release.apk'
