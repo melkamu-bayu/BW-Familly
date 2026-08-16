@@ -9,9 +9,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+RUN chmod +x entrypoint.sh
+
 EXPOSE 8000
 
-# Shell form so ${PORT} expands: Render (and most PaaS platforms) inject a PORT
-# env var the container must bind to; falls back to 8000 for local `docker run`
-# / docker-compose, where PORT is never set.
-CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
+# entrypoint.sh runs migrations + idempotent seeding before starting uvicorn --
+# necessary on platforms like Render's free tier that don't offer shell/
+# one-off-job access to run these manually. Local docker-compose overrides
+# this with its own `command:`, so this only takes effect on the deployed image.
+CMD ["./entrypoint.sh"]
