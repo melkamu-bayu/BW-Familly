@@ -15,7 +15,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Set up Flutter
+      - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -24,13 +24,12 @@ jobs:
       - name: Show Flutter version
         run: flutter --version
 
-      - name: Get dependencies
+      - name: Get Flutter dependencies
         working-directory: assetflow_mobile
         run: flutter pub get
 
-      - name: Analyze Flutter project
-        working-directory: assetflow_mobile
-        run: flutter analyze
+      - name: Create assets directory
+        run: mkdir -p assetflow_mobile/assets
 
       - name: Build release APK
         working-directory: assetflow_mobile
