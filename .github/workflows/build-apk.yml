@@ -28,6 +28,10 @@ jobs:
         working-directory: assetflow_mobile
         run: flutter pub get
 
+      - name: Generate Android project
+        working-directory: assetflow_mobile
+        run: flutter create --platforms=android .
+
       - name: Create assets directory
         run: mkdir -p assetflow_mobile/assets
 
