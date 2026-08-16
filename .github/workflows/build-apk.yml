@@ -1,47 +1,45 @@
-name: Build AssetFlow APK
+name: Build Flutter APK
 
 on:
   workflow_dispatch:
   push:
     branches:
-      - master
+      - main
 
 jobs:
   build-apk:
-    name: Build Flutter APK
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
-      - name: Setup Flutter
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: '3.35.7'
           channel: stable
           cache: true
 
-      - name: Show Flutter version
+      - name: Check Flutter
         run: flutter --version
 
-      - name: Get Flutter dependencies
-        working-directory: assetflow_mobile
+      - name: Get dependencies
         run: flutter pub get
 
-      - name: Generate Android project
-        working-directory: assetflow_mobile
-        run: flutter create --platforms=android .
-
-      - name: Create assets directory
-        run: mkdir -p assetflow_mobile/assets
-
-      - name: Build release APK
-        working-directory: assetflow_mobile
-        run: flutter build apk --release
+      - name: Build Release APK
+        run: |
+          flutter build apk --release \
+            --dart-define=API_BASE_URL=https://assetflow-api-f435.onrender.com/api/v1
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: AssetFlow-APK
-          path: assetflow_mobile/build/app/outputs/flutter-apk/app-release.apk
-          if-no-files-found: error
+          name: assetflow-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
