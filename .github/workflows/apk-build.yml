@@ -48,8 +48,8 @@ jobs:
       - name: Flutter version
         run: flutter --version
 
-      # Check that Render is reachable
       - name: Test Render API
+        shell: bash
         run: |
           set -e
 
@@ -65,8 +65,7 @@ jobs:
 
           echo "Render API is reachable."
 
-      # Add Android Internet permission
-      - name: Fix Android Internet permission
+      - name: Check Android Internet permission
         working-directory: ${{ steps.project.outputs.project_dir }}
         shell: bash
         run: |
@@ -75,40 +74,38 @@ jobs:
           MANIFEST="android/app/src/main/AndroidManifest.xml"
 
           if [ ! -f "$MANIFEST" ]; then
-            echo "ERROR: $MANIFEST not found."
+            echo "ERROR: AndroidManifest.xml not found:"
+            echo "$MANIFEST"
             exit 1
           fi
 
-          if grep -q 'android.permission.INTERNET' "$MANIFEST"; then
-            echo "Internet permission already exists."
+          if grep -q "android.permission.INTERNET" "$MANIFEST"; then
+            echo "Android Internet permission found."
           else
-            sed -i '/<manifest[^>]*>/a\
-    <uses-permission android:name="android.permission.INTERNET"/>' "$MANIFEST"
-
-            echo "Internet permission added."
+            echo "ERROR: Android Internet permission is missing."
+            echo ""
+            echo "Add this line to android/app/src/main/AndroidManifest.xml:"
+            echo ""
+            echo '<uses-permission android:name="android.permission.INTERNET"/>'
+            echo ""
+            exit 1
           fi
 
-          echo "Final AndroidManifest.xml:"
-          cat "$MANIFEST"
-
-      # Flutter dependencies
       - name: Flutter pub get
         working-directory: ${{ steps.project.outputs.project_dir }}
         run: flutter pub get
 
-      # Check code
       - name: Flutter analyze
         working-directory: ${{ steps.project.outputs.project_dir }}
         run: flutter analyze
 
-      # Build APK
       - name: Build release APK
         working-directory: ${{ steps.project.outputs.project_dir }}
+        shell: bash
         run: |
           flutter build apk --release \
             --dart-define=API_BASE_URL=https://assetflow-api-f435.onrender.com/api/v1
 
-      # Save APK
       - name: Upload APK
         uses: actions/upload-artifact@v5
         with:
