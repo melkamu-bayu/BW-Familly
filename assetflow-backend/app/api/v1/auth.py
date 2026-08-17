@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime, timedelta, timezone
 
+from fastapi.security import OAuth2PasswordRequestForm
 from fastapi import APIRouter, Depends, HTTPException, status
 from jose import JWTError
 from sqlalchemy import select
@@ -174,3 +175,16 @@ def set_biometric_enabled(
         biometric_enabled=current_user.biometric_enabled,
         pin_is_set=current_user.pin_hash is not None,
     )
+
+
+@router.post("/token", response_model=TokenResponse)
+def token(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db),
+):
+    login_data = LoginRequest(
+        email=form_data.username,
+        password=form_data.password,
+    )
+
+    return login(login_data, db)
