@@ -1,114 +1,40 @@
-name: Build AssetFlow APK
+name: Diagnose AssetFlow Project
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 jobs:
-  build-apk:
+  diagnose:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Find Flutter project
-        id: project
+      - name: Show repository structure
         shell: bash
         run: |
-          set -e
+          echo "Current directory:"
+          pwd
 
-          PUBSPEC=$(find . -name pubspec.yaml -not -path './.git/*' | head -1)
+          echo ""
+          echo "Top-level files and folders:"
+          ls -la
 
-          if [ -z "$PUBSPEC" ]; then
-            echo "ERROR: pubspec.yaml was not found."
-            exit 1
-          fi
+          echo ""
+          echo "Searching for pubspec.yaml:"
+          find . -name "pubspec.yaml" -not -path "./.git/*" -print
 
-          PROJECT_DIR=$(dirname "$PUBSPEC")
+          echo ""
+          echo "Searching for AndroidManifest.xml:"
+          find . -name "AndroidManifest.xml" -not -path "./.git/*" -print
 
-          echo "Flutter project: $PROJECT_DIR"
-          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+          echo ""
+          echo "Searching for android directories:"
+          find . -type d -name "android" -not -path "./.git/*" -print
 
-      - name: Setup Java
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.35.7'
-          channel: stable
-          cache: true
-
-      - name: Flutter version
-        run: flutter --version
-
-      - name: Test Render API
-        shell: bash
-        run: |
-          set -e
-
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            https://assetflow-api-f435.onrender.com/docs)
-
-          echo "Render API HTTP status: $HTTP_CODE"
-
-          if [ "$HTTP_CODE" != "200" ]; then
-            echo "ERROR: Render API cannot be reached."
-            exit 1
-          fi
-
-          echo "Render API is reachable."
-
-      - name: Check Android Internet permission
-        working-directory: ${{ steps.project.outputs.project_dir }}
-        shell: bash
-        run: |
-          set -e
-
-          MANIFEST="android/app/src/main/AndroidManifest.xml"
-
-          if [ ! -f "$MANIFEST" ]; then
-            echo "ERROR: AndroidManifest.xml not found:"
-            echo "$MANIFEST"
-            exit 1
-          fi
-
-          if grep -q "android.permission.INTERNET" "$MANIFEST"; then
-            echo "Android Internet permission found."
-          else
-            echo "ERROR: Android Internet permission is missing."
-            echo ""
-            echo "Add this line to android/app/src/main/AndroidManifest.xml:"
-            echo ""
-            echo '<uses-permission android:name="android.permission.INTERNET"/>'
-            echo ""
-            exit 1
-          fi
-
-      - name: Flutter pub get
-        working-directory: ${{ steps.project.outputs.project_dir }}
-        run: flutter pub get
-
-      - name: Flutter analyze
-        working-directory: ${{ steps.project.outputs.project_dir }}
-        run: flutter analyze
-
-      - name: Build release APK
-        working-directory: ${{ steps.project.outputs.project_dir }}
-        shell: bash
-        run: |
-          flutter build apk --release \
-            --dart-define=API_BASE_URL=https://assetflow-api-f435.onrender.com/api/v1
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v5
-        with:
-          name: assetflow-release-apk
-          path: '**/build/app/outputs/flutter-apk/app-release.apk'
-          if-no-files-found: error
+          echo ""
+          echo "Repository structure:"
+          find . -maxdepth 4 -type f \
+            -not -path "./.git/*" \
+            | sort
