@@ -1,0 +1,24 @@
+      - name: Test AssetFlow API login
+        env:
+          API_BASE_URL: https://assetflow-api-f435.onrender.com/api/v1
+          TEST_EMAIL: admin@assetflow.app
+          TEST_PASSWORD: ChangeMe123!
+        run: |
+          echo "Testing AssetFlow API..."
+
+          RESPONSE=$(curl -s -o /tmp/login_response.json \
+            -w "%{http_code}" \
+            -X POST "$API_BASE_URL/auth/login" \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json" \
+            -d "{\"email\":\"$TEST_EMAIL\",\"password\":\"$TEST_PASSWORD\"}")
+
+          echo "HTTP status: $RESPONSE"
+
+          if [ "$RESPONSE" != "200" ]; then
+            echo "❌ API login test failed"
+            cat /tmp/login_response.json
+            exit 1
+          fi
+
+          echo "✅ API login test passed"
