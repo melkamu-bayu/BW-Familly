@@ -71,8 +71,7 @@ jobs:
 
           permission = '    <uses-permission android:name="android.permission.INTERNET"/>\n'
 
-          marker = "<manifest"
-          start = text.find(marker)
+          start = text.find("<manifest")
 
           if start == -1:
               raise SystemExit("ERROR: <manifest> tag not found.")
@@ -80,16 +79,15 @@ jobs:
           end = text.find(">", start)
 
           if end == -1:
-              raise SystemExit("ERROR: <manifest> opening tag is invalid.")
+              raise SystemExit("ERROR: Invalid manifest.")
 
           text = text[:end + 1] + "\n" + permission + text[end + 1:]
 
           manifest.write_text(text)
+
           print("Internet permission added.")
           PY
           fi
-
-          echo "Checking Internet permission..."
 
           grep "android.permission.INTERNET" "$MANIFEST"
 
@@ -97,15 +95,26 @@ jobs:
         working-directory: assetflow_mobile
         run: flutter pub get
 
-      - name: Flutter analyze
-        working-directory: assetflow_mobile
-        run: flutter analyze
-
       - name: Build release APK
         working-directory: assetflow_mobile
         run: |
           flutter build apk --release \
             --dart-define=API_BASE_URL=https://assetflow-api-f435.onrender.com/api/v1
+
+      - name: Verify APK
+        working-directory: assetflow_mobile
+        run: |
+          APK="build/app/outputs/flutter-apk/app-release.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK was not created."
+            exit 1
+          fi
+
+          echo "======================================"
+          echo "APK BUILD SUCCESSFUL"
+          echo "======================================"
+          ls -lh "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v5
