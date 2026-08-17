@@ -32,6 +32,8 @@ jobs:
 
       - name: Test Render API
         run: |
+          set -e
+
           HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
             https://assetflow-api-f435.onrender.com/docs)
 
@@ -48,29 +50,56 @@ jobs:
         working-directory: assetflow_mobile
         run: |
           flutter create .
-          
           echo "Android project created."
 
-      - name: Check Android Internet permission
+      - name: Add Android Internet permission
         working-directory: assetflow_mobile
+        shell: bash
         run: |
-          if grep -q "android.permission.INTERNET" \
-            android/app/src/main/AndroidManifest.xml; then
-            echo "Internet permission found."
+          set -e
+
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+
+          if grep -q "android.permission.INTERNET" "$MANIFEST"; then
+            echo "Internet permission already exists."
           else
-            echo "ERROR: Internet permission missing."
-            exit 1
+            python3 - <<'PY'
+          from pathlib import Path
+
+          manifest = Path("android/app/src/main/AndroidManifest.xml")
+          text = manifest.read_text()
+
+          permission = '    <uses-permission android:name="android.permission.INTERNET"/>\n'
+
+          marker = "<manifest"
+          start = text.find(marker)
+
+          if start == -1:
+              raise SystemExit("ERROR: <manifest> tag not found.")
+
+          end = text.find(">", start)
+
+          if end == -1:
+              raise SystemExit("ERROR: <manifest> opening tag is invalid.")
+
+          text = text[:end + 1] + "\n" + permission + text[end + 1:]
+
+          manifest.write_text(text)
+          print("Internet permission added.")
+          PY
           fi
+
+          echo "Checking Internet permission..."
+
+          grep "android.permission.INTERNET" "$MANIFEST"
 
       - name: Flutter pub get
         working-directory: assetflow_mobile
-        run: |
-          flutter pub get
+        run: flutter pub get
 
       - name: Flutter analyze
         working-directory: assetflow_mobile
-        run: |
-          flutter analyze
+        run: flutter analyze
 
       - name: Build release APK
         working-directory: assetflow_mobile
