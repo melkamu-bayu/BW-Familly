@@ -106,6 +106,13 @@ on:
   push:
     branches:
       - main
+name: Build AssetFlow APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
   build-apk:
@@ -119,24 +126,29 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.35.7'
+          flutter-version: "3.35.7"
           channel: stable
           cache: true
 
       - name: Flutter version
         run: flutter --version
 
-      - name: Test Render API
+      - name: Check Render API
         run: |
           set -e
 
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            https://assetflow-api-f435.onrender.com/docs)
+          API_URL="https://assetflow-api-f435.onrender.com/api/v1"
+          DOCS_URL="https://assetflow-api-f435.onrender.com/docs"
+
+          echo "Testing backend:"
+          echo "$API_URL"
+
+          HTTP_CODE=$(curl -L -s -o /dev/null -w "%{http_code}" "$DOCS_URL")
 
           echo "Render API HTTP status: $HTTP_CODE"
 
@@ -147,19 +159,47 @@ jobs:
 
           echo "Render API is reachable."
 
+      - name: Check Flutter project
+        working-directory: assetflow_mobile
+        run: |
+          set -e
+
+          if [ ! -f "pubspec.yaml" ]; then
+            echo "ERROR: pubspec.yaml not found."
+            exit 1
+          fi
+
+          echo "Flutter project found."
+          pwd
+          ls -la
+
       - name: Create Android project
         working-directory: assetflow_mobile
         run: |
-          flutter create .
-          echo "Android project created."
+          set -e
 
-      - name: Add Android Internet permission
+          if [ ! -d "android" ]; then
+            echo "Android folder does not exist."
+            echo "Creating Android project..."
+            flutter create .
+          else
+            echo "Android folder already exists."
+          fi
+
+      - name: Configure Android Internet permission
         working-directory: assetflow_mobile
         shell: bash
         run: |
           set -e
 
           MANIFEST="android/app/src/main/AndroidManifest.xml"
+
+          if [ ! -f "$MANIFEST" ]; then
+            echo "ERROR: AndroidManifest.xml not found."
+            echo "Expected:"
+            echo "$MANIFEST"
+            exit 1
+          fi
 
           if grep -q "android.permission.INTERNET" "$MANIFEST"; then
             echo "Internet permission already exists."
@@ -180,7 +220,7 @@ jobs:
           end = text.find(">", start)
 
           if end == -1:
-              raise SystemExit("ERROR: Invalid manifest.")
+              raise SystemExit("ERROR: Invalid AndroidManifest.xml")
 
           text = text[:end + 1] + "\n" + permission + text[end + 1:]
 
@@ -190,22 +230,59 @@ jobs:
           PY
           fi
 
+          echo "Checking Internet permission..."
           grep "android.permission.INTERNET" "$MANIFEST"
 
       - name: Flutter pub get
         working-directory: assetflow_mobile
-        run: flutter pub get
+        run: |
+          set -e
+          flutter pub get
+
+      - name: Check API configuration
+        working-directory: assetflow_mobile
+        run: |
+          set -e
+
+          echo "Checking API configuration files..."
+
+          if [ -f "lib/core/config.dart" ]; then
+            echo "config.dart found."
+          else
+            echo "WARNING: lib/core/config.dart not found."
+          fi
+
+          if [ -f "lib/core/api_client.dart" ]; then
+            echo "api_client.dart found."
+          else
+            echo "WARNING: lib/core/api_client.dart not found."
+          fi
 
       - name: Build release APK
         working-directory: assetflow_mobile
         run: |
+          set -e
+
+          API_BASE_URL="https://assetflow-api-f435.onrender.com/api/v1"
+
+          echo "======================================"
+          echo "Building AssetFlow Release APK"
+          echo "======================================"
+          echo "API_BASE_URL:"
+          echo "$API_BASE_URL"
+          echo "======================================"
+
           flutter build apk --release \
-            --dart-define=API_BASE_URL=https://assetflow-api-f435.onrender.com/api/v1
+            --dart-define=API_BASE_URL="$API_BASE_URL"
 
       - name: Verify APK
         working-directory: assetflow_mobile
         run: |
+          set -e
+
           APK="build/app/outputs/flutter-apk/app-release.apk"
+
+          echo "Checking APK..."
 
           if [ ! -f "$APK" ]; then
             echo "ERROR: APK was not created."
@@ -215,6 +292,7 @@ jobs:
           echo "======================================"
           echo "APK BUILD SUCCESSFUL"
           echo "======================================"
+
           ls -lh "$APK"
 
       - name: Upload APK
