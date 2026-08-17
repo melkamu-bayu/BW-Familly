@@ -11,8 +11,13 @@ class ApiClient {
   ApiClient._internal() {
     _dio = Dio(BaseOptions(
       baseUrl: AppConfig.apiBaseUrl,
-      connectTimeout: const Duration(seconds: 15),
-      receiveTimeout: const Duration(seconds: 15),
+      // 60s, not the more typical 10-15s: free-tier hosting (e.g. Render)
+      // spins the backend down after ~15 min idle, and a cold start can take
+      // 30-60s to respond to the first request after that. A short timeout
+      // here doesn't fail faster in any useful way -- it just turns "the
+      // server is waking up" into a confusing false negative.
+      connectTimeout: const Duration(seconds: 60),
+      receiveTimeout: const Duration(seconds: 60),
     ));
 
     _dio.interceptors.add(InterceptorsWrapper(
