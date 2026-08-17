@@ -1,40 +1,86 @@
-name: Diagnose AssetFlow Project
+name: Build AssetFlow APK
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
-  diagnose:
+  build-apk:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Show repository structure
-        shell: bash
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.35.7'
+          channel: stable
+          cache: true
+
+      - name: Flutter version
+        run: flutter --version
+
+      - name: Test Render API
         run: |
-          echo "Current directory:"
-          pwd
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            https://assetflow-api-f435.onrender.com/docs)
 
-          echo ""
-          echo "Top-level files and folders:"
-          ls -la
+          echo "Render API HTTP status: $HTTP_CODE"
 
-          echo ""
-          echo "Searching for pubspec.yaml:"
-          find . -name "pubspec.yaml" -not -path "./.git/*" -print
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "ERROR: Render API is not reachable."
+            exit 1
+          fi
 
-          echo ""
-          echo "Searching for AndroidManifest.xml:"
-          find . -name "AndroidManifest.xml" -not -path "./.git/*" -print
+          echo "Render API is reachable."
 
-          echo ""
-          echo "Searching for android directories:"
-          find . -type d -name "android" -not -path "./.git/*" -print
+      - name: Create Android project
+        working-directory: assetflow_mobile
+        run: |
+          flutter create .
+          
+          echo "Android project created."
 
-          echo ""
-          echo "Repository structure:"
-          find . -maxdepth 4 -type f \
-            -not -path "./.git/*" \
-            | sort
+      - name: Check Android Internet permission
+        working-directory: assetflow_mobile
+        run: |
+          if grep -q "android.permission.INTERNET" \
+            android/app/src/main/AndroidManifest.xml; then
+            echo "Internet permission found."
+          else
+            echo "ERROR: Internet permission missing."
+            exit 1
+          fi
+
+      - name: Flutter pub get
+        working-directory: assetflow_mobile
+        run: |
+          flutter pub get
+
+      - name: Flutter analyze
+        working-directory: assetflow_mobile
+        run: |
+          flutter analyze
+
+      - name: Build release APK
+        working-directory: assetflow_mobile
+        run: |
+          flutter build apk --release \
+            --dart-define=API_BASE_URL=https://assetflow-api-f435.onrender.com/api/v1
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v5
+        with:
+          name: assetflow-release-apk
+          path: assetflow_mobile/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
