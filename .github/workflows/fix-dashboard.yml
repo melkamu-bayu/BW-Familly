@@ -1,0 +1,207 @@
+name: AssetFlow - Fix Dashboard Issue #3
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  dashboard:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Verify project
+        run: |
+          set -e
+
+          test -f assetflow_mobile/pubspec.yaml
+          test -f assetflow_mobile/lib/screens/dashboard/dashboard_screen.dart
+          test -f assetflow_mobile/lib/core/api_client.dart
+
+          echo "Project verification passed."
+
+      - name: Protect API client
+        run: |
+          sha256sum \
+            assetflow_mobile/lib/core/api_client.dart \
+            > /tmp/api_client.sha256
+
+      - name: Create backup tag
+        run: |
+          set -e
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          TAG="before-dashboard-issue-3-${GITHUB_RUN_ID}"
+
+          git tag "$TAG"
+          git push origin "$TAG"
+
+          echo "Backup tag created: $TAG"
+
+      - name: Patch Dashboard
+        run: |
+          set -e
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path(
+              "assetflow_mobile/lib/screens/dashboard/dashboard_screen.dart"
+          )
+
+          text = path.read_text()
+
+          changes = [
+              (
+                  """error: (err, _) => _ErrorTile(message: 'Could not load dashboard summary'),""",
+                  """error: (err, _) => _ErrorTile(
+                message: 'Could not load dashboard summary',
+                onRetry: () {
+                  ref.invalidate(dashboardSummaryProvider);
+                },
+              ),""",
+              ),
+              (
+                  """error: (err, _) => _ErrorTile(message: 'Could not load business performance'),""",
+                  """error: (err, _) => _ErrorTile(
+                message: 'Could not load business performance',
+                onRetry: () {
+                  ref.invalidate(businessPerformanceProvider);
+                },
+              ),""",
+              ),
+              (
+                  """class _ErrorTile extends StatelessWidget {
+            final String message;
+            const _ErrorTile({required this.message});""",
+                  """class _ErrorTile extends StatelessWidget {
+            final String message;
+            final VoidCallback onRetry;
+
+            const _ErrorTile({
+              required this.message,
+              required this.onRetry,
+            });""",
+              ),
+              (
+                  """            Text(message, style: const TextStyle(color: Colors.black54)),""",
+                  """            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.black54),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Retry'),
+            ),""",
+              ),
+          ]
+
+          for old, new in changes:
+              if old not in text:
+                  raise SystemExit(
+                      "SAFE PATCH FAILED.\n\n"
+                      "Expected source was not found:\n\n"
+                      + old
+                  )
+
+          for old, new in changes:
+              text = text.replace(old, new, 1)
+
+          path.write_text(text)
+
+          print("Dashboard patch completed successfully.")
+          PY
+
+      - name: Show Dashboard diff
+        run: |
+          git diff -- \
+            assetflow_mobile/lib/screens/dashboard/dashboard_screen.dart
+
+      - name: Format Dashboard
+        working-directory: assetflow_mobile
+        run: |
+          dart format \
+            lib/screens/dashboard/dashboard_screen.dart
+
+      - name: Verify API client unchanged
+        run: |
+          set -e
+
+          sha256sum -c /tmp/api_client.sha256
+
+          echo "API client is unchanged."
+
+      - name: Flutter pub get
+        working-directory: assetflow_mobile
+        run: flutter pub get
+
+      - name: Flutter analyze
+        working-directory: assetflow_mobile
+        run: flutter analyze
+
+      - name: Flutter test
+        working-directory: assetflow_mobile
+        run: flutter test
+
+      - name: Build release APK
+        working-directory: assetflow_mobile
+        run: |
+          flutter build apk --release \
+            --dart-define=API_BASE_URL=https://assetflow-api-f435.onrender.com/api/v1
+
+      - name: Verify APK
+        run: |
+          set -e
+
+          APK="assetflow_mobile/build/app/outputs/flutter-apk/app-release.apk"
+
+          test -f "$APK"
+
+          SIZE=$(stat -c%s "$APK")
+
+          if [ "$SIZE" -lt 100000 ]; then
+            echo "ERROR: APK is unexpectedly small."
+            exit 1
+          fi
+
+          echo "APK verified successfully."
+          echo "APK size: $SIZE bytes."
+
+      - name: Upload Dashboard APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AssetFlow-Dashboard-Issue3
+          path: assetflow_mobile/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+
+      - name: Commit Dashboard fix
+        run: |
+          set -e
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add \
+            assetflow_mobile/lib/screens/dashboard/dashboard_screen.dart
+
+          git commit \
+            -m "fix(assetflow): add dashboard retry handling"
+
+          git push origin HEAD:master
