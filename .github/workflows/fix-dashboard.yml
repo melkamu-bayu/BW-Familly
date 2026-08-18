@@ -1,0 +1,121 @@
+name: AssetFlow - Fix Dashboard Issue #3
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  dashboard:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Verify project
+        run: |
+          set -e
+
+          test -f assetflow_mobile/pubspec.yaml
+          test -f assetflow_mobile/pubspec.lock
+          test -f assetflow_mobile/analysis_options.yaml
+          test -f assetflow_mobile/lib/core/api_client.dart
+          test -f assetflow_mobile/lib/screens/dashboard/dashboard_screen.dart
+
+          echo "Project verified."
+
+      # Protect working #1/#2 code and project files
+      - name: Protect existing files
+        run: |
+          set -e
+
+          cp assetflow_mobile/analysis_options.yaml /tmp/analysis_options.yaml
+          cp assetflow_mobile/pubspec.lock /tmp/pubspec.lock
+
+          sha256sum assetflow_mobile/lib/core/api_client.dart \
+            > /tmp/api_client.sha256
+
+          echo "Protected existing project files."
+
+      # Backup before making changes
+      - name: Create backup tag
+        run: |
+          set -e
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          TAG="before-dashboard-issue-3-${GITHUB_RUN_ID}"
+
+          git tag "$TAG"
+          git push origin "$TAG"
+
+          echo "Backup tag created: $TAG"
+
+      # Dashboard-only patch
+      - name: Patch Dashboard
+        run: |
+          set -e
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path(
+              "assetflow_mobile/lib/screens/dashboard/dashboard_screen.dart"
+          )
+
+          text = path.read_text()
+
+          replacements = [
+              (
+                  """error: (err, _) => _ErrorTile(message: 'Could not load dashboard summary'),""",
+                  """error: (err, _) => _ErrorTile(
+                message: 'Could not load dashboard summary',
+                onRetry: () {
+                  ref.invalidate(dashboardSummaryProvider);
+                },
+              ),"""
+              ),
+              (
+                  """error: (err, _) => _ErrorTile(message: 'Could not load business performance'),""",
+                  """error: (err, _) => _ErrorTile(
+                message: 'Could not load business performance',
+                onRetry: () {
+                  ref.invalidate(businessPerformanceProvider);
+                },
+              ),"""
+              ),
+              (
+                  """class _ErrorTile extends StatelessWidget {
+            final String message;
+            const _ErrorTile({required this.message});""",
+                  """class _ErrorTile extends StatelessWidget {
+            final String message;
+            final VoidCallback onRetry;
+
+            const _ErrorTile({
+              required this.message,
+              required this.onRetry,
+            });"""
+              ),
+              (
+                  """Text(message, style: const TextStyle(color: Colors.black54)),""",
+                  """Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.black54),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: onRetry,
+              icon: const
