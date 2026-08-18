@@ -5,7 +5,7 @@ class AppConfig {
   /// Override with --dart-define=API_BASE_URL=... for staging/prod builds.
   static const String apiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://10.0.2.2:8000/api/v1', // 10.0.2.2 = Android emulator's host-machine loopback
+    defaultValue: 'https://assetflow-api-f435.onrender.com/api/v1', // 10.0.2.2 = Android emulator's host-machine loopback
   );
 
   static const String defaultCurrency = 'ETB';
