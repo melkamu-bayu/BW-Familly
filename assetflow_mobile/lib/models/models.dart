@@ -179,7 +179,7 @@ class Account {
         id: json['id'] as String,
         name: json['name'] as String,
         accountType: json['account_type'] as String,
-        currentBalance: (json['current_balance'] as num).toDouble(),
+        currentBalance: double.tryParse(json['current_balance'].toString()) ?? 0.0,
         currency: json['currency'] as String,
       );
 }
