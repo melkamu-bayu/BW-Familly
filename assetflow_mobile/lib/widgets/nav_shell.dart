@@ -2,90 +2,132 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../screens/dashboard/dashboard_screen.dart';
-import '../screens/vehicles/vehicles_list_screen.dart';
+import '../core/theme.dart';
 import '../screens/transactions/add_transaction_sheet.dart';
-import '../screens/notifications/notifications_screen.dart';
-import '../screens/settings/settings_screen.dart';
 import '../state/auth_provider.dart';
 
-/// Top-level shell holding the bottom nav. Section 25 lists 11 nav items;
-/// only Dashboard, Vehicles, Alerts, and Settings get bottom-nav slots here
-/// since 11 items don't fit a bottom bar -- the rest (Houses, Construction
-/// Shop, Gold Project, Accounts, Reports, Analytics) are reachable from
-/// Settings until they get dedicated entry points.
-class NavShell extends ConsumerStatefulWidget {
+class NavShell extends ConsumerWidget {
   final Widget child;
   const NavShell({super.key, required this.child});
 
-  @override
-  ConsumerState<NavShell> createState() => _NavShellState();
-}
-
-class _NavShellState extends ConsumerState<NavShell> {
-  int _currentIndex = 0;
-
-  static const _tabs = ['/dashboard', '/vehicles', '/notifications', '/settings'];
-
-  void _onTap(int index) {
-    setState(() => _currentIndex = index);
-    context.go(_tabs[index]);
+  int _indexFor(String path) {
+    if (path.startsWith('/assets') || path.startsWith('/vehicles') || path.startsWith('/properties') || path.startsWith('/shop') || path.startsWith('/gold-project') || path.startsWith('/accounts')) return 1;
+    if (path.startsWith('/reports')) return 3;
+    if (path.startsWith('/settings')) return 4;
+    return 0;
   }
 
-  Future<void> _showAddTransactionMenu(BuildContext context) async {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final path = GoRouterState.of(context).uri.path;
+    final selected = _indexFor(path);
+    final canRecord = ref.watch(authProvider).canRecordTransactions;
+
+    return Scaffold(
+      body: child,
+      bottomNavigationBar: SafeArea(
+        top: false,
+        child: Container(
+          height: 78,
+          margin: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+          padding: const EdgeInsets.symmetric(horizontal: 6),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: const Color(0xFFE8ECF3)),
+            boxShadow: const [BoxShadow(color: Color(0x160B2A66), blurRadius: 22, offset: Offset(0, 8))],
+          ),
+          child: Row(
+            children: [
+              _NavItem(icon: Icons.home_outlined, selectedIcon: Icons.home_rounded, label: 'Home', selected: selected == 0, onTap: () => context.go('/dashboard')),
+              _NavItem(icon: Icons.business_center_outlined, selectedIcon: Icons.business_center, label: 'Assets', selected: selected == 1, onTap: () => context.go('/assets')),
+              Expanded(
+                child: GestureDetector(
+                  onTap: canRecord ? () => _showAdd(context) : null,
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Transform.translate(
+                        offset: const Offset(0, -12),
+                        child: Container(
+                          width: 48,
+                          height: 48,
+                          decoration: BoxDecoration(
+                            color: canRecord ? AppTheme.blue : const Color(0xFFD8DEE8),
+                            shape: BoxShape.circle,
+                            boxShadow: const [BoxShadow(color: Color(0x250B2A66), blurRadius: 14, offset: Offset(0, 6))],
+                          ),
+                          child: const Icon(Icons.add_rounded, color: Colors.white, size: 30),
+                        ),
+                      ),
+                      Transform.translate(
+                        offset: const Offset(0, -10),
+                        child: const Text('Add', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppTheme.muted)),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              _NavItem(icon: Icons.bar_chart_outlined, selectedIcon: Icons.bar_chart_rounded, label: 'Reports', selected: selected == 3, onTap: () => context.go('/reports')),
+              _NavItem(icon: Icons.person_outline_rounded, selectedIcon: Icons.person_rounded, label: 'Profile', selected: selected == 4, onTap: () => context.go('/settings')),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showAdd(BuildContext context) async {
     final kind = await showModalBottomSheet<TransactionKind>(
       context: context,
-      builder: (context) => SafeArea(
-        child: Wrap(
-          children: [
-            ListTile(
-              leading: const Icon(Icons.arrow_upward, color: Colors.green),
-              title: const Text('Add Revenue'),
-              onTap: () => Navigator.pop(context, TransactionKind.revenue),
-            ),
-            ListTile(
-              leading: const Icon(Icons.arrow_downward, color: Colors.red),
-              title: const Text('Add Expense'),
-              onTap: () => Navigator.pop(context, TransactionKind.expense),
-            ),
-          ],
+      showDragHandle: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Text('Add to AssetFlow', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: AppTheme.ink)),
+            const SizedBox(height: 10),
+            ListTile(leading: const CircleAvatar(backgroundColor: Color(0x1535C759), child: Icon(Icons.arrow_downward, color: AppTheme.green)), title: const Text('Add Income'), onTap: () => Navigator.pop(sheetContext, TransactionKind.revenue)),
+            ListTile(leading: const CircleAvatar(backgroundColor: Color(0x15E94B5F), child: Icon(Icons.arrow_upward, color: AppTheme.red)), title: const Text('Add Expense'), onTap: () => Navigator.pop(sheetContext, TransactionKind.expense)),
+          ]),
         ),
       ),
     );
 
-    if (kind != null && context.mounted) {
-      showModalBottomSheet(
-        context: context,
-        isScrollControlled: true,
-        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-        builder: (context) => AddTransactionSheet(kind: kind),
-      );
-    }
+    if (kind == null || !context.mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (_) => AddTransactionSheet(kind: kind),
+    );
   }
+}
+
+class _NavItem extends StatelessWidget {
+  final IconData icon;
+  final IconData selectedIcon;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _NavItem({required this.icon, required this.selectedIcon, required this.label, required this.selected, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    final authState = ref.watch(authProvider);
-    final canRecord = authState.canRecordTransactions;
-
-    return Scaffold(
-      body: widget.child,
-      floatingActionButton: canRecord
-          ? FloatingActionButton.extended(
-              onPressed: () => _showAddTransactionMenu(context),
-              icon: const Icon(Icons.add),
-              label: const Text('Add Transaction'),
-            )
-          : null,
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _currentIndex,
-        onDestinationSelected: _onTap,
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.dashboard_outlined), selectedIcon: Icon(Icons.dashboard), label: 'Dashboard'),
-          NavigationDestination(icon: Icon(Icons.local_shipping_outlined), selectedIcon: Icon(Icons.local_shipping), label: 'Vehicles'),
-          NavigationDestination(icon: Icon(Icons.notifications_outlined), selectedIcon: Icon(Icons.notifications), label: 'Alerts'),
-          NavigationDestination(icon: Icon(Icons.settings_outlined), selectedIcon: Icon(Icons.settings), label: 'Settings'),
-        ],
+    return Expanded(
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(selected ? selectedIcon : icon, color: selected ? AppTheme.blue : AppTheme.muted, size: 24),
+            const SizedBox(height: 4),
+            Text(label, style: TextStyle(fontSize: 10.5, fontWeight: selected ? FontWeight.w800 : FontWeight.w500, color: selected ? AppTheme.blue : AppTheme.muted)),
+          ],
+        ),
       ),
     );
   }

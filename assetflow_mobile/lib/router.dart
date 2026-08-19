@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'models/models.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/dashboard/dashboard_screen.dart';
+import 'screens/assets/assets_hub_screen.dart';
 import 'screens/vehicles/vehicles_list_screen.dart';
 import 'screens/vehicles/vehicle_detail_screen.dart';
 import 'screens/properties/properties_list_screen.dart';
@@ -37,6 +38,7 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state, child) => NavShell(child: child),
         routes: [
           GoRoute(path: '/dashboard', builder: (context, state) => const DashboardScreen()),
+          GoRoute(path: '/assets', builder: (context, state) => const AssetsHubScreen()),
           GoRoute(path: '/vehicles', builder: (context, state) => const VehiclesListScreen()),
           GoRoute(
             path: '/vehicles/:id',

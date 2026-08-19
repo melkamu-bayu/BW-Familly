@@ -1,16 +1,14 @@
 class AppConfig {
   AppConfig._();
 
-  /// Points at the AssetFlow backend built in the previous phases.
-  /// Override with --dart-define=API_BASE_URL=... for staging/prod builds.
+  /// Production API is the default so a release APK cannot accidentally use
+  /// the Android emulator host URL. Override for local/staging builds with:
+  /// --dart-define=API_BASE_URL=https://example.com/api/v1
   static const String apiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'https://assetflow-api-f435.onrender.com/api/v1', // 10.0.2.2 = Android emulator's host-machine loopback
+    defaultValue: 'https://assetflow-api-f435.onrender.com/api/v1',
   );
 
   static const String defaultCurrency = 'ETB';
-
-  /// How long the app can sit in the background before requiring
-  /// PIN/biometric re-unlock (Section 20 session timeout).
   static const Duration idleLockTimeout = Duration(minutes: 5);
 }

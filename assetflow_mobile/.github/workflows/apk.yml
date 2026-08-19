@@ -1,0 +1,108 @@
+name: Build AssetFlow APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.35.7"
+          channel: stable
+          cache: true
+
+      - name: Check Render API
+        run: |
+          set -e
+          DOCS_URL="https://assetflow-api-f435.onrender.com/docs"
+          HTTP_CODE=$(curl -L -s -o /dev/null -w "%{http_code}" "$DOCS_URL")
+          echo "Render API HTTP status: $HTTP_CODE"
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "ERROR: Render API is not reachable."
+            exit 1
+          fi
+
+      - name: Check Flutter project
+        working-directory: assetflow_mobile
+        run: |
+          set -e
+          test -f pubspec.yaml
+          test -f lib/main.dart
+          echo "Flutter project found."
+
+      - name: Create Android project when missing
+        working-directory: assetflow_mobile
+        run: |
+          set -e
+          if [ ! -d android ]; then
+            flutter create .
+          fi
+
+      - name: Configure Android Internet permission
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -e
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          test -f "$MANIFEST"
+          if ! grep -q "android.permission.INTERNET" "$MANIFEST"; then
+            python3 - <<'PY'
+from pathlib import Path
+manifest = Path("android/app/src/main/AndroidManifest.xml")
+text = manifest.read_text()
+start = text.find("<manifest")
+if start == -1:
+    raise SystemExit("<manifest> tag not found")
+end = text.find(">", start)
+if end == -1:
+    raise SystemExit("Invalid AndroidManifest.xml")
+permission = '    <uses-permission android:name="android.permission.INTERNET"/>\n'
+text = text[:end + 1] + "\n" + permission + text[end + 1:]
+manifest.write_text(text)
+PY
+          fi
+          grep -q "android.permission.INTERNET" "$MANIFEST"
+
+      - name: Flutter pub get
+        working-directory: assetflow_mobile
+        run: flutter pub get
+
+      - name: Analyze Dart code
+        working-directory: assetflow_mobile
+        run: flutter analyze
+
+      - name: Build release APK
+        working-directory: assetflow_mobile
+        run: |
+          flutter build apk --release \
+            --dart-define=API_BASE_URL="https://assetflow-api-f435.onrender.com/api/v1"
+
+      - name: Verify APK
+        working-directory: assetflow_mobile
+        run: |
+          test -f build/app/outputs/flutter-apk/app-release.apk
+          ls -lh build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v5
+        with:
+          name: assetflow-release-apk
+          path: assetflow_mobile/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
