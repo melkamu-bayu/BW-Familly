@@ -1,0 +1,71 @@
+name: Extract AssetFlow New UI ZIP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Extract ZIP
+        shell: bash
+        run: |
+          set -e
+
+          echo "======================================"
+          echo "ASSETFLOW NEW UI ZIP EXTRACTION"
+          echo "======================================"
+
+          ZIP="AssetFlow_mobile_final_home_ui.zip"
+          OUT="extracted_assetflow_ui"
+
+          if [ ! -f "$ZIP" ]; then
+            echo "ERROR: $ZIP was not found."
+            exit 1
+          fi
+
+          echo "ZIP found:"
+          ls -lh "$ZIP"
+
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+
+          echo ""
+          echo "Extracting..."
+
+          unzip -q "$ZIP" -d "$OUT"
+
+          echo ""
+          echo "Extraction completed successfully."
+
+          echo ""
+          echo "Extracted structure:"
+          find "$OUT" -type f | sort
+
+      - name: Package extracted UI
+        shell: bash
+        run: |
+          set -e
+
+          cd extracted_assetflow_ui
+
+          zip -qr ../AssetFlow_New_UI_Extracted.zip .
+
+          cd ..
+
+          echo "======================================"
+          echo "EXTRACTED UI PACKAGE"
+          echo "======================================"
+
+          ls -lh AssetFlow_New_UI_Extracted.zip
+
+      - name: Upload extracted UI
+        uses: actions/upload-artifact@v5
+        with:
+          name: AssetFlow-New-UI-Extracted
+          path: AssetFlow_New_UI_Extracted.zip
+          if-no-files-found: error
