@@ -23,9 +23,18 @@ class NavShell extends ConsumerWidget {
     final selected = _indexFor(path);
     final canRecord = ref.watch(authProvider).canRecordTransactions;
 
-    return Scaffold(
-      body: child,
-      bottomNavigationBar: SafeArea(
+    return PopScope(
+  canPop: path != '/dashboard',
+  onPopInvokedWithResult: (didPop, result) {
+    if (didPop) return;
+
+    if (path != '/dashboard') {
+      context.go('/dashboard');
+    }
+  },
+  child: Scaffold(
+    body: child,
+    bottomNavigationBar: SafeArea(
         top: false,
         child: Container(
           height: 78,
