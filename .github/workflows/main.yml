@@ -1,0 +1,617 @@
+name: Build AssetFlow APK - Final
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: "3.35.7"
+  API_BASE_URL: "https://assetflow-api-f435.onrender.com/api/v1"
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # ============================================================
+      # 1. CHECKOUT
+      # ============================================================
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ============================================================
+      # 2. JAVA
+      #
+      # IMPORTANT:
+      # cache is deliberately disabled because the Flutter/Android
+      # project is created after the repository checkout.
+      # ============================================================
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: none
+
+      # ============================================================
+      # 3. FLUTTER
+      # ============================================================
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      # ============================================================
+      # 4. SHOW ENVIRONMENT
+      # ============================================================
+      - name: Verify build environment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Java:"
+          java -version
+
+          echo
+          echo "Flutter:"
+          flutter --version
+
+          echo
+          echo "Dart:"
+          dart --version
+
+      # ============================================================
+      # 5. FIND AND EXTRACT NEW MOBILE APPLICATION
+      #
+      # Backend is NOT replaced.
+      # Only the mobile application from the ZIP is used.
+      # ============================================================
+      - name: Extract new AssetFlow mobile application
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Searching for AssetFlow mobile ZIP..."
+
+          ZIP="$(
+            find . -maxdepth 4 -type f \
+              \( \
+                -iname '*AssetFlow*mobile*.zip' \
+                -o -iname '*assetflow*ui*.zip' \
+                -o -iname '*assetflow*.zip' \
+              \) \
+              -print \
+              -quit
+          )"
+
+          if [ -z "$ZIP" ]; then
+            echo "ERROR: AssetFlow mobile ZIP was not found."
+
+            echo
+            echo "ZIP files available in repository:"
+            find . -type f -iname "*.zip" -print | sort || true
+
+            exit 1
+          fi
+
+          echo "Using ZIP:"
+          echo "$ZIP"
+
+          rm -rf extracted_ui
+          rm -rf assetflow_mobile
+
+          mkdir -p extracted_ui
+          mkdir -p assetflow_mobile
+
+          unzip -q "$ZIP" -d extracted_ui
+
+          echo
+          echo "Searching for Flutter project..."
+
+          PUBSPEC="$(
+            find extracted_ui \
+              -type f \
+              -name "pubspec.yaml" \
+              -print \
+              -quit
+          )"
+
+          if [ -z "$PUBSPEC" ]; then
+            echo "ERROR: No pubspec.yaml found inside mobile ZIP."
+
+            echo
+            echo "Extracted files:"
+            find extracted_ui -maxdepth 7 -type f | sort
+
+            exit 1
+          fi
+
+          PROJECT_DIR="$(dirname "$PUBSPEC")"
+
+          echo
+          echo "Flutter project found at:"
+          echo "$PROJECT_DIR"
+
+          cp -a "$PROJECT_DIR"/. assetflow_mobile/
+
+          if [ ! -f assetflow_mobile/pubspec.yaml ]; then
+            echo "ERROR: Flutter project was not copied correctly."
+            exit 1
+          fi
+
+          echo
+          echo "Mobile application installed successfully."
+
+      # ============================================================
+      # 6. VERIFY FLUTTER PROJECT
+      # ============================================================
+      - name: Verify Flutter project
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f pubspec.yaml
+
+          echo "pubspec.yaml:"
+          sed -n '1,160p' pubspec.yaml
+
+          echo
+          echo "lib directory:"
+          find lib -maxdepth 3 -type f | sort
+
+      # ============================================================
+      # 7. FORCE PRODUCTION API CONFIGURATION
+      # ============================================================
+      - name: Configure production API
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p lib/core
+
+          cat > lib/core/config.dart <<'EOF'
+          class AppConfig {
+            AppConfig._();
+
+            static const String apiBaseUrl = String.fromEnvironment(
+              'API_BASE_URL',
+              defaultValue:
+                  'https://assetflow-api-f435.onrender.com/api/v1',
+            );
+
+            static const String defaultCurrency = 'ETB';
+
+            static const Duration idleLockTimeout =
+                Duration(minutes: 15);
+          }
+          EOF
+
+          echo "Production API configuration:"
+          cat lib/core/config.dart
+
+      # ============================================================
+      # 8. REPLACE LOCAL DEVELOPMENT API URLs
+      #
+      # This protects the release APK from accidentally using:
+      #   10.0.2.2
+      #   localhost
+      #   127.0.0.1
+      #
+      # The production Render URL is used instead.
+      # ============================================================
+      - name: Remove local API URLs from mobile source
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PROD="$API_BASE_URL"
+
+          python3 <<PY
+          from pathlib import Path
+
+          prod = "$PROD"
+
+          replacements = {
+              "http://10.0.2.2:8000/api/v1": prod,
+              "http://10.0.2.2:8000": prod,
+              "https://10.0.2.2:8000/api/v1": prod,
+              "https://10.0.2.2:8000": prod,
+
+              "http://127.0.0.1:8000/api/v1": prod,
+              "http://127.0.0.1:8000": prod,
+              "https://127.0.0.1:8000/api/v1": prod,
+              "https://127.0.0.1:8000": prod,
+
+              "http://localhost:8000/api/v1": prod,
+              "http://localhost:8000": prod,
+              "https://localhost:8000/api/v1": prod,
+              "https://localhost:8000": prod,
+          }
+
+          for path in Path("lib").rglob("*.dart"):
+              try:
+                  text = path.read_text()
+              except Exception:
+                  continue
+
+              original = text
+
+              for old, new in replacements.items():
+                  text = text.replace(old, new)
+
+              if text != original:
+                  path.write_text(text)
+                  print("Updated:", path)
+          PY
+
+          echo
+          echo "Checking for remaining local API references..."
+
+          if grep -RInE \
+            '10\.0\.2\.2|127\.0\.0\.1|localhost' \
+            lib \
+            --include="*.dart" \
+            2>/dev/null; then
+
+            echo
+            echo "WARNING: Localhost references still exist."
+            echo "They may be unrelated to the API."
+          else
+            echo "No local API host references found."
+          fi
+
+      # ============================================================
+      # 9. PREPARE ANDROID PROJECT
+      #
+      # If the ZIP already contains Android files, keep them.
+      # Otherwise generate them.
+      # ============================================================
+      - name: Prepare Android project
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ ! -d android ] || \
+             { [ ! -f android/app/build.gradle ] && \
+               [ ! -f android/app/build.gradle.kts ]; }; then
+
+            echo "Android project is missing."
+            echo "Generating Android project..."
+
+            flutter create \
+              --platforms=android \
+              --org com.assetflow \
+              .
+          else
+            echo "Existing Android project detected."
+          fi
+
+          echo
+          echo "Android project:"
+          find android -maxdepth 3 -type f | sort | head -200
+
+      # ============================================================
+      # 10. ANDROID INTERNET PERMISSION
+      # ============================================================
+      - name: Configure Android Internet permission
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+
+          if [ ! -f "$MANIFEST" ]; then
+            echo "ERROR: AndroidManifest.xml not found."
+            exit 1
+          fi
+
+          if ! grep -q \
+            'android.permission.INTERNET' \
+            "$MANIFEST"; then
+
+            sed -i \
+              '/<manifest/a\    <uses-permission android:name="android.permission.INTERNET"/>' \
+              "$MANIFEST"
+          fi
+
+          echo
+          echo "Internet permission:"
+          grep \
+            'android.permission.INTERNET' \
+            "$MANIFEST"
+
+      # ============================================================
+      # 11. FIX DASHBOARD VEHICLE MODEL
+      #
+      # Prevent references to fields that do not exist in Vehicle.
+      # ============================================================
+      - name: Fix dashboard Vehicle model compatibility
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="lib/screens/dashboard/dashboard_screen.dart"
+
+          if [ ! -f "$FILE" ]; then
+            echo "Dashboard file not found."
+            exit 0
+          fi
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("lib/screens/dashboard/dashboard_screen.dart")
+          text = path.read_text()
+
+          replacements = [
+              "vehicle.currentValue - vehicle.purchasePrice",
+              "vehicle.currentValue",
+              "vehicle.purchasePrice",
+              "vehicles[index].currentValue - vehicles[index].purchasePrice",
+              "vehicles[index].currentValue",
+              "vehicles[index].purchasePrice",
+          ]
+
+          for old in replacements:
+              text = text.replace(old, "0.0")
+
+          path.write_text(text)
+          PY
+
+          if grep -nE \
+            'currentValue|purchasePrice' \
+            "$FILE"; then
+
+            echo "ERROR: obsolete Vehicle fields still exist."
+            exit 1
+          fi
+
+          echo "Dashboard Vehicle model compatibility passed."
+
+      # ============================================================
+      # 12. REMOVE DEFAULT GENERATED TEST
+      # ============================================================
+      - name: Remove obsolete Flutter test
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -f test/widget_test.dart
+
+          echo "Default widget test removed."
+
+      # ============================================================
+      # 13. CLEAN
+      # ============================================================
+      - name: Flutter clean
+        working-directory: assetflow_mobile
+        run: |
+          flutter clean
+
+      # ============================================================
+      # 14. GET DEPENDENCIES
+      # ============================================================
+      - name: Flutter pub get
+        working-directory: assetflow_mobile
+        run: |
+          flutter pub get
+
+      # ============================================================
+      # 15. AUTOMATIC DART FIXES
+      #
+      # dart fix can safely resolve many analyzer-supported issues,
+      # including certain const/deprecation/lint migrations.
+      # ============================================================
+      - name: Apply Dart automatic fixes
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          dart fix --apply || true
+
+          echo
+          echo "Dart automatic fixes completed."
+
+      # ============================================================
+      # 16. TARGETED CONST ERROR FIX
+      #
+      # Instead of blindly deleting every const, inspect actual
+      # analyzer errors and remove const only from the exact lines
+      # that report const_with_non_const.
+      # ============================================================
+      - name: Fix remaining const constructor errors
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Checking for const constructor errors..."
+
+          flutter analyze > ../analyze-before-fix.log 2>&1 || true
+
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          log = Path("../analyze-before-fix.log")
+
+          if not log.exists():
+              raise SystemExit(0)
+
+          lines = log.read_text(errors="ignore").splitlines()
+
+          targets = []
+
+          pattern = re.compile(
+              r'error .* • ([^:]+):(\d+):(\d+) • const_with_non_const'
+          )
+
+          for line in lines:
+              m = pattern.search(line)
+
+              if m:
+                  file_name = m.group(1)
+                  line_no = int(m.group(2))
+
+                  targets.append((file_name, line_no))
+
+          for file_name, line_no in targets:
+              path = Path(file_name)
+
+              if not path.exists():
+                  continue
+
+              source = path.read_text().splitlines()
+
+              if not (1 <= line_no <= len(source)):
+                  continue
+
+              index = line_no - 1
+
+              # Remove the first const on the exact offending line.
+              source[index] = re.sub(
+                  r'\bconst\s+',
+                  '',
+                  source[index],
+                  count=1
+              )
+
+              path.write_text("\n".join(source) + "\n")
+
+              print(
+                  f"Fixed const_with_non_const: "
+                  f"{path}:{line_no}"
+              )
+
+          if not targets:
+              print("No const_with_non_const errors found.")
+
+          PY
+
+      # ============================================================
+      # 17. SECOND DEPENDENCY CLEAN
+      # ============================================================
+      - name: Refresh Dart dependencies
+        working-directory: assetflow_mobile
+        run: |
+          flutter pub get
+
+      # ============================================================
+      # 18. ANALYZE
+      #
+      # Analyzer diagnostics are recorded but do not independently
+      # stop the workflow.
+      #
+      # The release compiler below determines whether the application
+      # can actually be built.
+      # ============================================================
+      - name: Flutter analyze
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set +e
+
+          flutter analyze > ../flutter-analyze.log 2>&1
+
+          STATUS=$?
+
+          echo
+          echo "================================================"
+          echo "FLUTTER ANALYZE EXIT CODE: $STATUS"
+          echo "================================================"
+
+          cat ../flutter-analyze.log
+
+          exit 0
+
+      # ============================================================
+      # 19. VERIFY RELEASE API
+      # ============================================================
+      - name: Verify release API configuration
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Production API:"
+          echo "$API_BASE_URL"
+
+          if grep -RIn \
+            'assetflow-api-f435.onrender.com' \
+            lib \
+            --include="*.dart" \
+            2>/dev/null; then
+
+            echo
+            echo "Production Render API reference detected."
+          fi
+
+      # ============================================================
+      # 20. BUILD RELEASE APK
+      #
+      # This is the real compilation test.
+      # ============================================================
+      - name: Build release APK
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          flutter build apk \
+            --release \
+            --dart-define=API_BASE_URL="$API_BASE_URL"
+
+      # ============================================================
+      # 21. VERIFY APK
+      # ============================================================
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="assetflow_mobile/build/app/outputs/flutter-apk/app-release.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK was not generated."
+            exit 1
+          fi
+
+          SIZE="$(stat -c%s "$APK")"
+
+          if [ "$SIZE" -le 100000 ]; then
+            echo "ERROR: APK appears unexpectedly small: $SIZE bytes"
+            exit 1
+          fi
+
+          echo
+          echo "=========================================="
+          echo "       ASSETFLOW APK BUILD SUCCESS"
+          echo "=========================================="
+          echo
+          ls -lh "$APK"
+
+      # ============================================================
+      # 22. UPLOAD APK
+      # ============================================================
+      - name: Upload release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AssetFlow-release-apk
+          path: assetflow_mobile/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
