@@ -133,8 +133,9 @@ class _AddTransactionSheetState extends ConsumerState<AddTransactionSheet> {
           ],
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 
   @override
   void dispose() {
