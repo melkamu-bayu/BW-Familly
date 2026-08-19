@@ -79,11 +79,19 @@ class _HomeContent extends StatelessWidget {
       _AssetTileData('Total Assets', '$managedAssetCount Managed', machineValue + roadVehicleValue + propertyValue + shopValue + projectValue, AppTheme.navy, Icons.pie_chart_outline, '/accounts'),
     ];
 
-    return ListView(
-      physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-      children: [
-        _Header(unreadCount: data.unreadNotifications),
+    return Column(
+  children: [
+    // Fixed top bar
+    _Header(
+      unreadCount: data.unreadNotifications,
+    ),
+
+    // Scrollable dashboard content
+    Expanded(
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        children: [
         const SizedBox(height: 20),
         Text(
           'Good Morning, $userName 👋',
@@ -128,8 +136,10 @@ class _HomeContent extends StatelessWidget {
         else
           ...data.transactions.take(5).map((transaction) => _TransactionTile(transaction: transaction)),
         const SizedBox(height: 18),
-      ],
-    );
+              ],
+      ),
+    ],
+  );
   }
 
   bool _looksLikeMachine(Vehicle v) {
