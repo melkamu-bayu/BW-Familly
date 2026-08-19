@@ -69,11 +69,15 @@ class _AddTransactionSheetState extends ConsumerState<AddTransactionSheet> {
     final accountsAsync = ref.watch(accountsProvider);
     final categories = isRevenue ? _revenueCategories : _expenseCategories;
 
-    return Padding(
-      padding: EdgeInsets.only(
-        left: 20, right: 20, top: 20,
-        bottom: 20 + MediaQuery.of(context).viewInsets.bottom,
-      ),
+    return SafeArea(
+  top: false,
+  child: Padding(
+    padding: EdgeInsets.only(
+      left: 20,
+      right: 20,
+      top: 20,
+      bottom: 20 + MediaQuery.of(context).viewInsets.bottom,
+    ),
       child: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
