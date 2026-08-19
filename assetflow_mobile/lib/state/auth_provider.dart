@@ -34,19 +34,33 @@ class AuthNotifier extends StateNotifier<AuthState> {
     _restoreSession();
   }
 
-  Future<void> _restoreSession() async {
+    Future<void> _restoreSession() async {
     final token = await TokenStorage.instance.getAccessToken();
+
     if (token == null) {
       state = const AuthState.unauthenticated();
       return;
     }
+
     try {
       final response = await ApiClient.instance.dio.get('/auth/me');
-      state = AuthState.authenticated(CurrentUser.fromJson(response.data as Map<String, dynamic>));
+
+      state = AuthState.authenticated(
+        CurrentUser.fromJson(
+          response.data as Map<String, dynamic>,
+        ),
+      );
+
       SyncService.instance.start();
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        await TokenStorage.instance.clear();
+        state = const AuthState.unauthenticated();
+      } else {
+        state = const AuthState.unknown();
+      }
     } catch (_) {
-      await TokenStorage.instance.clear();
-      state = const AuthState.unauthenticated();
+      state = const AuthState.unknown();
     }
   }
 
