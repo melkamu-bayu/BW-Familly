@@ -3,15 +3,25 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/api_client.dart';
 import '../models/models.dart';
 
-final dashboardSummaryProvider = FutureProvider.autoDispose<DashboardSummary>((ref) async {
+final dashboardSummaryProvider = FutureProvider<DashboardSummary>((ref) async {
   final response = await ApiClient.instance.dio.get('/dashboard/summary');
-  return DashboardSummary.fromJson(response.data as Map<String, dynamic>);
+  return DashboardSummary.fromJson(
+    response.data as Map<String, dynamic>,
+  );
 });
 
-final businessPerformanceProvider = FutureProvider.autoDispose<List<BusinessPerformanceLine>>((ref) async {
-  final response = await ApiClient.instance.dio.get('/dashboard/business-performance');
+final businessPerformanceProvider =
+    FutureProvider<List<BusinessPerformanceLine>>((ref) async {
+  final response = await ApiClient.instance.dio.get(
+    '/dashboard/business-performance',
+  );
+
   return (response.data as List)
-      .map((e) => BusinessPerformanceLine.fromJson(e as Map<String, dynamic>))
+      .map(
+        (e) => BusinessPerformanceLine.fromJson(
+          e as Map<String, dynamic>,
+        ),
+      )
       .toList();
 });
 
