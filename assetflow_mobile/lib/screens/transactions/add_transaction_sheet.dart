@@ -69,10 +69,16 @@ class _AddTransactionSheetState extends ConsumerState<AddTransactionSheet> {
     final accountsAsync = ref.watch(accountsProvider);
     final categories = isRevenue ? _revenueCategories : _expenseCategories;
 
-    return Padding(
+        return Padding(
       padding: EdgeInsets.only(
         left: 20, right: 20, top: 20,
-        bottom: 20 + MediaQuery.of(context).viewInsets.bottom,
+        // viewInsets.bottom = keyboard height (0 when keyboard is closed).
+        // viewPadding.bottom = the device's own reserved bottom area (the
+        // Android gesture bar / nav buttons, iOS home indicator) -- this is
+        // NOT covered by viewInsets and is present whether or not the
+        // keyboard is open. Without adding it, the Save button sits behind
+        // the system nav bar on any device using gesture navigation.
+        bottom: 20 + MediaQuery.of(context).viewInsets.bottom + MediaQuery.of(context).viewPadding.bottom,
       ),
       child: SingleChildScrollView(
         child: Column(
