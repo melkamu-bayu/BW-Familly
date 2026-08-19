@@ -1,71 +1,545 @@
-name: Extract AssetFlow New UI ZIP
+name: Replace AssetFlow With New UI and Build APK
 
 on:
   workflow_dispatch:
 
 jobs:
-  extract:
+  replace-and-build:
     runs-on: ubuntu-latest
 
     steps:
+      # ============================================================
+      # 1. CHECKOUT
+      # ============================================================
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Extract ZIP
+      # ============================================================
+      # 2. JAVA
+      # ============================================================
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # ============================================================
+      # 3. FLUTTER
+      # ============================================================
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.35.7"
+          channel: stable
+          cache: true
+
+      - name: Show versions
+        run: |
+          java -version
+          flutter --version
+
+      # ============================================================
+      # 4. CHECK ZIP
+      # ============================================================
+      - name: Verify New UI ZIP
         shell: bash
         run: |
           set -e
 
-          echo "======================================"
-          echo "ASSETFLOW NEW UI ZIP EXTRACTION"
-          echo "======================================"
-
           ZIP="AssetFlow_mobile_final_home_ui.zip"
-          OUT="extracted_assetflow_ui"
+
+          echo "======================================"
+          echo "VERIFYING NEW UI ZIP"
+          echo "======================================"
 
           if [ ! -f "$ZIP" ]; then
-            echo "ERROR: $ZIP was not found."
+            echo "ERROR: $ZIP not found."
             exit 1
           fi
 
-          echo "ZIP found:"
           ls -lh "$ZIP"
 
-          rm -rf "$OUT"
-          mkdir -p "$OUT"
-
           echo ""
-          echo "Extracting..."
+          echo "ZIP CONTENT:"
+          unzip -l "$ZIP"
 
-          unzip -q "$ZIP" -d "$OUT"
-
-          echo ""
-          echo "Extraction completed successfully."
-
-          echo ""
-          echo "Extracted structure:"
-          find "$OUT" -type f | sort
-
-      - name: Package extracted UI
+      # ============================================================
+      # 5. BACKUP CURRENT APP
+      # ============================================================
+      - name: Backup current AssetFlow
         shell: bash
         run: |
           set -e
 
-          cd extracted_assetflow_ui
-
-          zip -qr ../AssetFlow_New_UI_Extracted.zip .
-
-          cd ..
-
           echo "======================================"
-          echo "EXTRACTED UI PACKAGE"
+          echo "BACKING UP CURRENT APPLICATION"
           echo "======================================"
 
-          ls -lh AssetFlow_New_UI_Extracted.zip
+          if [ ! -d "assetflow_mobile" ]; then
+            echo "ERROR: Existing assetflow_mobile directory not found."
+            exit 1
+          fi
 
-      - name: Upload extracted UI
+          rm -rf assetflow_mobile_backup
+
+          cp -a assetflow_mobile assetflow_mobile_backup
+
+          echo "Backup created:"
+          du -sh assetflow_mobile_backup
+
+      # ============================================================
+      # 6. EXTRACT NEW UI
+      # ============================================================
+      - name: Extract New UI
+        shell: bash
+        run: |
+          set -e
+
+          echo "======================================"
+          echo "EXTRACTING NEW UI"
+          echo "======================================"
+
+          rm -rf extracted_ui
+
+          mkdir -p extracted_ui
+
+          unzip -q \
+            AssetFlow_mobile_final_home_ui.zip \
+            -d extracted_ui
+
+          PROJECT="extracted_ui/assetflow_mobile"
+
+          if [ ! -f "$PROJECT/pubspec.yaml" ]; then
+            echo "ERROR: New Flutter project not found."
+            find extracted_ui -maxdepth 4 -type f | sort
+            exit 1
+          fi
+
+          echo "New UI project:"
+          echo "$PROJECT"
+
+          echo ""
+          echo "New UI structure:"
+          find "$PROJECT" -maxdepth 3 -type f | sort
+
+      # ============================================================
+      # 7. REPLACE APPLICATION
+      # ============================================================
+      - name: Replace assetflow_mobile with New UI
+        shell: bash
+        run: |
+          set -e
+
+          echo "======================================"
+          echo "INSTALLING NEW UI"
+          echo "======================================"
+
+          rm -rf assetflow_mobile
+
+          cp -a extracted_ui/assetflow_mobile assetflow_mobile
+
+          test -f assetflow_mobile/pubspec.yaml
+          test -f assetflow_mobile/lib/main.dart
+
+          echo "New UI installed successfully."
+
+      # ============================================================
+      # 8. CREATE ANDROID PROJECT
+      # ============================================================
+      - name: Create Android project
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -e
+
+          echo "======================================"
+          echo "ANDROID PROJECT"
+          echo "======================================"
+
+          if [ ! -d "android" ]; then
+            echo "Android project missing."
+            echo "Creating Android project..."
+
+            flutter create \
+              --platforms=android \
+              .
+          else
+            echo "Android project already exists."
+          fi
+
+          test -d android
+
+      # ============================================================
+      # 9. CONFIGURE INTERNET PERMISSION
+      # ============================================================
+      - name: Configure Android Internet permission
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -e
+
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+
+          if [ ! -f "$MANIFEST" ]; then
+            echo "ERROR: AndroidManifest.xml not found."
+            exit 1
+          fi
+
+          if ! grep -q "android.permission.INTERNET" "$MANIFEST"; then
+            python3 - <<'PY'
+from pathlib import Path
+
+path = Path("android/app/src/main/AndroidManifest.xml")
+text = path.read_text()
+
+permission = '    <uses-permission android:name="android.permission.INTERNET"/>\n'
+
+manifest_start = text.find("<manifest")
+
+if manifest_start == -1:
+    raise SystemExit("ERROR: <manifest> tag not found.")
+
+manifest_end = text.find(">", manifest_start)
+
+if manifest_end == -1:
+    raise SystemExit("ERROR: Invalid AndroidManifest.xml")
+
+text = (
+    text[:manifest_end + 1]
+    + "\n"
+    + permission
+    + text[manifest_end + 1:]
+)
+
+path.write_text(text)
+
+print("Internet permission added.")
+PY
+          fi
+
+          grep -q "android.permission.INTERNET" "$MANIFEST"
+
+          echo "Internet permission confirmed."
+
+      # ============================================================
+      # 10. PRODUCTION API CONFIGURATION
+      # ============================================================
+      - name: Configure production API
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -e
+
+          API_URL="https://assetflow-api-f435.onrender.com/api/v1"
+
+          echo "======================================"
+          echo "PRODUCTION API"
+          echo "======================================"
+          echo "$API_URL"
+
+          CONFIG="lib/core/config.dart"
+
+          if [ ! -f "$CONFIG" ]; then
+            echo "ERROR: $CONFIG not found."
+            exit 1
+          fi
+
+          echo ""
+          echo "Current configuration:"
+          cat "$CONFIG"
+
+          echo ""
+          echo "Checking for accidental emulator URL..."
+
+          if grep -Rni \
+            -E \
+            "10\.0\.2\.2|127\.0\.0\.1|localhost" \
+            lib \
+            --include="*.dart"; then
+
+            echo ""
+            echo "WARNING: Local/emulator URL found in source."
+            echo "The release build will still receive the production URL"
+            echo "through --dart-define."
+          else
+            echo "No emulator URL found."
+          fi
+
+      # ============================================================
+      # 11. DOWNLOAD DEPENDENCIES
+      # ============================================================
+      - name: Flutter pub get
+        working-directory: assetflow_mobile
+        run: |
+          set -e
+          flutter pub get
+
+      # ============================================================
+      # 12. VERIFY VEHICLE MODEL
+      #
+      # New dashboard expects:
+      #   currentValue
+      #   purchasePrice
+      #
+      # Existing Vehicle model does not have them.
+      #
+      # Add nullable-compatible fields without changing
+      # existing API behavior.
+      # ============================================================
+      - name: Repair Vehicle model compatibility
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -e
+
+          MODEL="lib/models/models.dart"
+
+          if [ ! -f "$MODEL" ]; then
+            echo "ERROR: Vehicle model file not found."
+            exit 1
+          fi
+
+          echo "Checking Vehicle model..."
+
+          if grep -q "currentValue" "$MODEL" && \
+             grep -q "purchasePrice" "$MODEL"; then
+
+            echo "Vehicle model already contains required fields."
+            exit 0
+          fi
+
+          python3 - <<'PY'
+from pathlib import Path
+
+path = Path("lib/models/models.dart")
+text = path.read_text()
+
+start = text.find("class Vehicle {")
+
+if start == -1:
+    raise SystemExit("ERROR: class Vehicle not found.")
+
+end = text.find("\nclass VehicleProfitability", start)
+
+if end == -1:
+    raise SystemExit(
+        "ERROR: VehicleProfitability marker not found."
+    )
+
+old = text[start:end]
+
+new = '''class Vehicle {
+  final String id;
+  final String businessUnitId;
+  final String name;
+  final String? plateNumber;
+  final String? vehicleType;
+  final String? driverName;
+  final double mileage;
+  final String status;
+  final double? purchasePrice;
+  final double? currentValue;
+
+  Vehicle({
+    required this.id,
+    required this.businessUnitId,
+    required this.name,
+    this.plateNumber,
+    this.vehicleType,
+    this.driverName,
+    required this.mileage,
+    required this.status,
+    this.purchasePrice,
+    this.currentValue,
+  });
+
+  factory Vehicle.fromJson(Map<String, dynamic> json) => Vehicle(
+        id: json['id'] as String,
+        businessUnitId: json['business_unit_id'] as String,
+        name: json['name'] as String,
+        plateNumber: json['plate_number'] as String?,
+        vehicleType: json['vehicle_type'] as String?,
+        driverName: json['driver_name'] as String?,
+        mileage: (json['mileage'] as num?)?.toDouble() ?? 0.0,
+        status: json['status'] as String? ?? 'active',
+        purchasePrice:
+            (json['purchase_price'] as num?)?.toDouble(),
+        currentValue:
+            (json['current_value'] as num?)?.toDouble(),
+      );
+}
+'''
+
+path.write_text(text[:start] + new + text[end:])
+
+print("Vehicle model compatibility updated.")
+PY
+
+          echo ""
+          echo "Vehicle model:"
+          sed -n '/class Vehicle {/,/class VehicleProfitability/p' "$MODEL"
+
+      # ============================================================
+      # 13. FIX OUTDATED FLUTTER TEST
+      # ============================================================
+      - name: Remove incompatible default widget test
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -e
+
+          if [ -f "test/widget_test.dart" ]; then
+            echo "Removing outdated default widget test."
+
+            rm -f test/widget_test.dart
+          else
+            echo "No outdated widget_test.dart found."
+          fi
+
+      # ============================================================
+      # 14. CHECK MAIN APP
+      # ============================================================
+      - name: Verify application entry point
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -e
+
+          if [ ! -f "lib/main.dart" ]; then
+            echo "ERROR: lib/main.dart missing."
+            exit 1
+          fi
+
+          echo "main.dart found."
+
+          echo ""
+          echo "Application entry:"
+          sed -n '1,180p' lib/main.dart
+
+      # ============================================================
+      # 15. VERIFY API CLIENT
+      # ============================================================
+      - name: Verify API client
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -e
+
+          if [ ! -f "lib/core/api_client.dart" ]; then
+            echo "ERROR: api_client.dart missing."
+            exit 1
+          fi
+
+          if [ ! -f "lib/core/config.dart" ]; then
+            echo "ERROR: config.dart missing."
+            exit 1
+          fi
+
+          echo "API client and config confirmed."
+
+      # ============================================================
+      # 16. ANALYZE
+      # ============================================================
+      - name: Flutter analyze
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -e
+
+          flutter analyze
+
+      # ============================================================
+      # 17. CHECK RENDER API
+      # ============================================================
+      - name: Check production API
+        shell: bash
+        run: |
+          set -e
+
+          API_URL="https://assetflow-api-f435.onrender.com/api/v1"
+          DOCS_URL="https://assetflow-api-f435.onrender.com/docs"
+
+          echo "Testing:"
+          echo "$API_URL"
+
+          HTTP_CODE=$(curl \
+            -L \
+            -s \
+            -o /dev/null \
+            -w "%{http_code}" \
+            --connect-timeout 15 \
+            --max-time 30 \
+            "$DOCS_URL")
+
+          echo "HTTP status: $HTTP_CODE"
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "ERROR: Production API is unreachable."
+            exit 1
+          fi
+
+          echo "Production API reachable."
+
+      # ============================================================
+      # 18. BUILD APK
+      # ============================================================
+      - name: Build release APK
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -e
+
+          API_URL="https://assetflow-api-f435.onrender.com/api/v1"
+
+          echo "======================================"
+          echo "BUILDING ASSETFLOW APK"
+          echo "======================================"
+
+          echo "API_BASE_URL:"
+          echo "$API_URL"
+
+          flutter build apk \
+            --release \
+            --dart-define=API_BASE_URL="$API_URL"
+
+      # ============================================================
+      # 19. VERIFY APK
+      # ============================================================
+      - name: Verify APK
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -e
+
+          APK="build/app/outputs/flutter-apk/app-release.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK was not generated."
+            exit 1
+          fi
+
+          echo "======================================"
+          echo "APK BUILD SUCCESSFUL"
+          echo "======================================"
+
+          ls -lh "$APK"
+
+      # ============================================================
+      # 20. UPLOAD APK
+      # ============================================================
+      - name: Upload release APK
         uses: actions/upload-artifact@v5
         with:
-          name: AssetFlow-New-UI-Extracted
-          path: AssetFlow_New_UI_Extracted.zip
+          name: AssetFlow-New-UI-Release-APK
+          path: assetflow_mobile/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+
+      # ============================================================
+      # 21. UPLOAD BACKUP
+      # ============================================================
+      - name: Upload old application backup
+        uses: actions/upload-artifact@v5
+        with:
+          name: AssetFlow-Old-App-Backup
+          path: assetflow_mobile_backup
           if-no-files-found: error
