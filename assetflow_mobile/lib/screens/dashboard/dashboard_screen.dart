@@ -5,9 +5,34 @@ import '../../core/theme.dart';
 import '../../state/auth_provider.dart';
 import '../../state/data_providers.dart';
 import '../../widgets/summary_card.dart';
+import '../transactions/add_transaction_sheet.dart';
 
 class DashboardScreen extends ConsumerWidget {
   const DashboardScreen({super.key});
+
+  Future<void> _openTransaction(
+    BuildContext context,
+    TransactionKind kind,
+  ) async {
+    final result = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => Material(
+        borderRadius: const BorderRadius.vertical(
+          top: Radius.circular(24),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: AddTransactionSheet(kind: kind),
+      ),
+    );
+
+    if (result == true && context.mounted) {
+      // Dashboard providers will be refreshed when the screen
+      // is rebuilt after the transaction is saved.
+    }
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -17,7 +42,12 @@ class DashboardScreen extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('Hello, ${user?.fullName.split(' ').first ?? ''}'),
+        title: Text(
+          'Hello, ${user?.fullName.split(' ').first ?? ''}',
+          style: const TextStyle(
+            fontWeight: FontWeight.w700,
+          ),
+        ),
       ),
       body: RefreshIndicator(
         onRefresh: () async {
@@ -25,65 +55,243 @@ class DashboardScreen extends ConsumerWidget {
           ref.invalidate(businessPerformanceProvider);
         },
         child: ListView(
-          padding: const EdgeInsets.all(16),
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
           children: [
             summaryAsync.when(
               loading: () => const Padding(
-                padding: EdgeInsets.symmetric(vertical: 40),
-                child: Center(child: CircularProgressIndicator()),
+                padding: EdgeInsets.symmetric(vertical: 60),
+                child: Center(
+                  child: CircularProgressIndicator(),
+                ),
               ),
-              error: (err, _) => _ErrorTile(message: 'Could not load dashboard summary'),
-              data: (summary) => Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Net Profit (This Month)', style: TextStyle(color: Colors.black54, fontSize: 13)),
-                  const SizedBox(height: 4),
-                  Text(
-                    formatCurrency(summary.monthNetProfit, currency: summary.currency),
-                    style: TextStyle(
-                      fontSize: 34,
-                      fontWeight: FontWeight.w800,
-                      color: summary.monthNetProfit >= 0 ? AppTheme.profitColor : AppTheme.lossColor,
+              error: (err, _) => _ErrorTile(
+                message: 'Could not load dashboard summary',
+                onRetry: () {
+                  ref.invalidate(dashboardSummaryProvider);
+                },
+              ),
+              data: (summary) {
+                final isProfit = summary.monthNetProfit >= 0;
+
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // ─────────────────────────────────────────────
+                    // NET PROFIT HERO
+                    // ─────────────────────────────────────────────
+                    Card(
+                      elevation: 0,
+                      margin: EdgeInsets.zero,
+                      child: Padding(
+                        padding: const EdgeInsets.all(20),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                const Expanded(
+                                  child: Text(
+                                    'NET PROFIT',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w800,
+                                      letterSpacing: 1.2,
+                                      color: Colors.black54,
+                                    ),
+                                  ),
+                                ),
+                                Icon(
+                                  isProfit
+                                      ? Icons.trending_up
+                                      : Icons.trending_down,
+                                  color: isProfit
+                                      ? AppTheme.profitColor
+                                      : AppTheme.lossColor,
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              formatCurrency(
+                                summary.monthNetProfit,
+                                currency: summary.currency,
+                              ),
+                              style: TextStyle(
+                                fontSize: 32,
+                                fontWeight: FontWeight.w900,
+                                color: isProfit
+                                    ? AppTheme.profitColor
+                                    : AppTheme.lossColor,
+                              ),
+                            ),
+                            const SizedBox(height: 5),
+                            const Text(
+                              'This month',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: Colors.black54,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 20),
-                  GridView.count(
-                    crossAxisCount: 2,
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    mainAxisSpacing: 12,
-                    crossAxisSpacing: 12,
-                    childAspectRatio: 1.5,
-                    children: [
-                      SummaryCard(label: "Today's Revenue", amount: summary.todayRevenue, icon: Icons.trending_up),
-                      SummaryCard(label: "Today's Expenses", amount: summary.todayExpense, icon: Icons.trending_down),
-                      SummaryCard(label: 'Total Revenue', amount: summary.allTimeRevenue, icon: Icons.stacked_line_chart),
-                      SummaryCard(label: 'Total Expenses', amount: summary.allTimeExpense, icon: Icons.receipt_long),
-                      SummaryCard(
-                        label: 'Cash & Bank Balance',
-                        amount: summary.cashAndBankBalance,
-                        icon: Icons.account_balance_wallet_outlined,
+
+                    const SizedBox(height: 14),
+
+                    // ─────────────────────────────────────────────
+                    // PRIMARY ACTIONS
+                    // ─────────────────────────────────────────────
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _QuickActionButton(
+                            icon: Icons.add,
+                            label: 'Revenue',
+                            onTap: () => _openTransaction(
+                              context,
+                              TransactionKind.revenue,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: _QuickActionButton(
+                            icon: Icons.remove,
+                            label: 'Expense',
+                            onTap: () => _openTransaction(
+                              context,
+                              TransactionKind.expense,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+
+                    const SizedBox(height: 22),
+
+                    // ─────────────────────────────────────────────
+                    // TODAY
+                    // ─────────────────────────────────────────────
+                    const _SectionTitle(
+                      title: 'Today',
+                    ),
+
+                    const SizedBox(height: 10),
+
+                    Row(
+                      children: [
+                        Expanded(
+                          child: SummaryCard(
+                            label: "Today's Revenue",
+                            amount: summary.todayRevenue,
+                            icon: Icons.trending_up,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: SummaryCard(
+                            label: "Today's Expenses",
+                            amount: summary.todayExpense,
+                            icon: Icons.trending_down,
+                          ),
+                        ),
+                      ],
+                    ),
+
+                    const SizedBox(height: 12),
+
+                    // ─────────────────────────────────────────────
+                    // FINANCIAL POSITION
+                    // ─────────────────────────────────────────────
+                    const _SectionTitle(
+                      title: 'Financial Position',
+                    ),
+
+                    const SizedBox(height: 10),
+
+                    Row(
+                      children: [
+                        Expanded(
+                          child: SummaryCard(
+                            label: 'Cash & Bank',
+                            amount: summary.cashAndBankBalance,
+                            icon: Icons.account_balance_wallet_outlined,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: SummaryCard(
+                            label: 'Total Profit',
+                            amount: summary.allTimeNetProfit,
+                            icon: Icons.savings_outlined,
+                            emphasizeSign: true,
+                          ),
+                        ),
+                      ],
+                    ),
+
+                    const SizedBox(height: 28),
+
+                    // ─────────────────────────────────────────────
+                    // BUSINESS PERFORMANCE
+                    // ─────────────────────────────────────────────
+                    Row(
+                      children: [
+                        const Expanded(
+                          child: _SectionTitle(
+                            title: 'Business Performance',
+                          ),
+                        ),
+                        Icon(
+                          Icons.insights_outlined,
+                          color: AppTheme.primary,
+                        ),
+                      ],
+                    ),
+
+                    const SizedBox(height: 12),
+
+                    performanceAsync.when(
+                      loading: () => const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 20),
+                        child: Center(
+                          child: CircularProgressIndicator(),
+                        ),
                       ),
-                      SummaryCard(
-                        label: 'Total Net Profit',
-                        amount: summary.allTimeNetProfit,
-                        icon: Icons.savings_outlined,
-                        emphasizeSign: true,
+                      error: (err, _) => _ErrorTile(
+                        message:
+                            'Could not load business performance',
+                        onRetry: () {
+                          ref.invalidate(
+                            businessPerformanceProvider,
+                          );
+                        },
                       ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 28),
-            const Text('Business Performance', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-            const SizedBox(height: 12),
-            performanceAsync.when(
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (err, _) => _ErrorTile(message: 'Could not load business performance'),
-              data: (lines) => Column(
-                children: lines.map((line) => _BusinessPerformanceTile(line: line)).toList(),
-              ),
+                      data: (lines) {
+                        if (lines.isEmpty) {
+                          return const _EmptyTile(
+                            message:
+                                'No business performance data yet',
+                          );
+                        }
+
+                        return Column(
+                          children: lines
+                              .map(
+                                (line) =>
+                                    _BusinessPerformanceTile(
+                                  line: line,
+                                ),
+                              )
+                              .toList(),
+                        );
+                      },
+                    ),
+                  ],
+                );
+              },
             ),
           ],
         ),
@@ -92,9 +300,64 @@ class DashboardScreen extends ConsumerWidget {
   }
 }
 
+class _QuickActionButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _QuickActionButton({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 54,
+      child: FilledButton.icon(
+        onPressed: onTap,
+        icon: Icon(
+          icon,
+          size: 21,
+        ),
+        label: Text(
+          label,
+          style: const TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SectionTitle extends StatelessWidget {
+  final String title;
+
+  const _SectionTitle({
+    required this.title,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      title,
+      style: const TextStyle(
+        fontSize: 18,
+        fontWeight: FontWeight.w800,
+      ),
+    );
+  }
+}
+
 class _BusinessPerformanceTile extends StatelessWidget {
-  final dynamic line; // BusinessPerformanceLine
-  const _BusinessPerformanceTile({required this.line});
+  final dynamic line;
+
+  const _BusinessPerformanceTile({
+    required this.line,
+  });
 
   IconData _iconFor(String code) {
     switch (code) {
@@ -105,7 +368,7 @@ class _BusinessPerformanceTile extends StatelessWidget {
       case 'SHOP':
         return Icons.storefront_outlined;
       case 'PROJECT':
-        return Icons.diamond_outlined;
+        return Icons.construction_outlined;
       default:
         return Icons.business_outlined;
     }
@@ -114,43 +377,74 @@ class _BusinessPerformanceTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isProfit = line.profit >= 0;
+
     return Card(
+      elevation: 0,
       margin: const EdgeInsets.only(bottom: 10),
       child: Padding(
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.all(15),
         child: Row(
           children: [
             CircleAvatar(
-              backgroundColor: AppTheme.primary.withOpacity(0.1),
-              child: Icon(_iconFor(line.code as String), color: AppTheme.primary, size: 20),
+              backgroundColor:
+                  AppTheme.primary.withOpacity(0.10),
+              child: Icon(
+                _iconFor(line.code as String),
+                color: AppTheme.primary,
+                size: 21,
+              ),
             ),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment:
+                    CrossAxisAlignment.start,
                 children: [
-                  Text(line.category as String, style: const TextStyle(fontWeight: FontWeight.w600)),
-                  const SizedBox(height: 2),
                   Text(
-                    'Rev ${formatCurrency(line.revenue as double)} · Exp ${formatCurrency(line.expense as double)}',
-                    style: const TextStyle(fontSize: 12, color: Colors.black54),
+                    line.category as String,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 5),
+                  Text(
+                    'Revenue ${formatCurrency(line.revenue as double)}',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Colors.black54,
+                    ),
+                  ),
+                  Text(
+                    'Expense ${formatCurrency(line.expense as double)}',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Colors.black54,
+                    ),
                   ),
                 ],
               ),
             ),
+            const SizedBox(width: 8),
             Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
+              crossAxisAlignment:
+                  CrossAxisAlignment.end,
               children: [
                 Text(
                   formatCurrency(line.profit as double),
                   style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                    color: isProfit ? AppTheme.profitColor : AppTheme.lossColor,
+                    fontWeight: FontWeight.w900,
+                    color: isProfit
+                        ? AppTheme.profitColor
+                        : AppTheme.lossColor,
                   ),
                 ),
+                const SizedBox(height: 3),
                 Text(
                   '${(line.percentageContribution as double).toStringAsFixed(1)}%',
-                  style: const TextStyle(fontSize: 11, color: Colors.black45),
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: Colors.black45,
+                  ),
                 ),
               ],
             ),
@@ -163,19 +457,68 @@ class _BusinessPerformanceTile extends StatelessWidget {
 
 class _ErrorTile extends StatelessWidget {
   final String message;
-  const _ErrorTile({required this.message});
+  final VoidCallback onRetry;
+
+  const _ErrorTile({
+    required this.message,
+    required this.onRetry,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 24),
-      child: Center(
+    return Card(
+      elevation: 0,
+      child: Padding(
+        padding: const EdgeInsets.all(24),
         child: Column(
           children: [
-            const Icon(Icons.cloud_off, color: Colors.black38, size: 32),
-            const SizedBox(height: 8),
-            Text(message, style: const TextStyle(color: Colors.black54)),
+            const Icon(
+              Icons.cloud_off_outlined,
+              size: 34,
+              color: Colors.black38,
+            ),
+            const SizedBox(height: 10),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Colors.black54,
+              ),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Retry'),
+            ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _EmptyTile extends StatelessWidget {
+  final String message;
+
+  const _EmptyTile({
+    required this.message,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      elevation: 0,
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Center(
+          child: Text(
+            message,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Colors.black54,
+            ),
+          ),
         ),
       ),
     );
