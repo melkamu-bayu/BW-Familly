@@ -1,0 +1,82 @@
+name: Build AssetFlow APK - New UI
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # ------------------------------------------------------------
+      # 1. CHECKOUT
+      # ------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      # ------------------------------------------------------------
+      # 2. SETUP JAVA
+      # ------------------------------------------------------------
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # ------------------------------------------------------------
+      # 3. SETUP FLUTTER
+      # ------------------------------------------------------------
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.35.7"
+          channel: stable
+          cache: true
+
+      # ------------------------------------------------------------
+      # 4. CHECK REPOSITORY
+      # ------------------------------------------------------------
+      - name: Check repository
+        run: |
+          set -e
+
+          echo "======================================"
+          echo "Repository"
+          echo "======================================"
+
+          pwd
+          ls -lah
+
+          echo ""
+          echo "Searching for UI ZIP..."
+
+          if [ ! -f "AssetFlow_mobile_final_home_ui.zip" ]; then
+            echo "ERROR: AssetFlow_mobile_final_home_ui.zip not found."
+            exit 1
+          fi
+
+          echo "ZIP FOUND:"
+          ls -lh "AssetFlow_mobile_final_home_ui.zip"
+
+      # ------------------------------------------------------------
+      # 5. BACKUP CURRENT APP
+      # ------------------------------------------------------------
+      - name: Backup current assetflow_mobile
+        run: |
+          set -e
+
+          if [ -d "assetflow_mobile" ]; then
+            echo "Backing up existing assetflow_mobile..."
+
+            rm -rf assetflow_mobile_backup
+
+            cp -R assetflow_mobile assetflow_mobile_backup
+
+            echo "Backup created:"
+            du -sh assetflow_mobile_backup
+          else
+            echo "No existing assetflow_mobile
