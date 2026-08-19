@@ -196,7 +196,7 @@ class _Header extends StatelessWidget {
             children: [
               Image.asset('assets/assetflow_logo.png', width: 42, height: 42),
               const SizedBox(width: 8),
-              const Expanded(
+              Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
