@@ -136,11 +136,11 @@ class _HomeContent extends StatelessWidget {
         else
           ...data.transactions.take(5).map((transaction) => _TransactionTile(transaction: transaction)),
         const SizedBox(height: 18),
-              ],
+        ],
       ),
-    ],
-  );
-  }
+    ),
+  ],
+);
 
   bool _looksLikeMachine(Vehicle v) {
     final name = v.name.toUpperCase();
