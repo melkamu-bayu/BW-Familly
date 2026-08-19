@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class SyncRevenueItem(BaseModel):
@@ -37,13 +37,32 @@ class SyncExpenseItem(BaseModel):
 
 class SyncPushItem(BaseModel):
     """
-    One outbox entry from the mobile client. `entity_type` selects which
-    schema `payload` is validated against; `client_created_at` is informational
-    only (server `created_at` remains authoritative for ordering).
+    One outbox entry from the mobile client.
+    The entity_type determines which payload schema is used.
     """
     entity_type: Literal["revenue", "expense"]
     client_created_at: datetime
     payload: SyncRevenueItem | SyncExpenseItem
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_payload_by_entity_type(cls, data):
+        if not isinstance(data, dict):
+            return data
+
+        entity_type = data.get("entity_type")
+        payload = data.get("payload")
+
+        if not isinstance(payload, dict):
+            return data
+
+        if entity_type == "revenue":
+            data["payload"] = SyncRevenueItem.model_validate(payload)
+
+        elif entity_type == "expense":
+            data["payload"] = SyncExpenseItem.model_validate(payload)
+
+        return data
 
 
 class SyncPushRequest(BaseModel):
