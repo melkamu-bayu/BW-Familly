@@ -141,7 +141,7 @@ class _HomeContent extends StatelessWidget {
     ),
   ],
 );
-
+}
   bool _looksLikeMachine(Vehicle v) {
     final name = v.name.toUpperCase();
     final type = (v.vehicleType ?? '').toUpperCase();
