@@ -1,0 +1,169 @@
+name: Extract New AssetFlow Mobile Permanently
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  extract-mobile:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Find AssetFlow mobile ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Searching for AssetFlow mobile ZIP..."
+
+          ZIP="$(find . -type f \
+            \( \
+              -iname 'AssetFlow_mobile_final_home_ui.zip' \
+              -o -iname '*assetflow*mobile*.zip' \
+              -o -iname '*AssetFlow*UI*.zip' \
+            \) \
+            | head -n 1)"
+
+          if [ -z "$ZIP" ]; then
+            echo "ERROR: AssetFlow mobile ZIP was not found."
+            echo
+            echo "ZIP files found:"
+            find . -type f -iname '*.zip' -print || true
+            exit 1
+          fi
+
+          echo "ZIP found:"
+          echo "$ZIP"
+
+          echo "ZIP_PATH=$ZIP" >> "$GITHUB_ENV"
+
+      - name: Extract ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf extracted_assetflow
+          mkdir -p extracted_assetflow
+
+          unzip -q "$ZIP_PATH" -d extracted_assetflow
+
+          echo "ZIP extracted successfully."
+
+          echo
+          echo "Extracted files:"
+          find extracted_assetflow -maxdepth 4 -type f | sort | head -300
+
+      - name: Locate Flutter project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PROJECT="$(find extracted_assetflow \
+            -type f \
+            -name pubspec.yaml \
+            -print \
+            | sed 's#/pubspec.yaml$##' \
+            | head -n 1)"
+
+          if [ -z "$PROJECT" ]; then
+            echo "ERROR: No Flutter project found."
+            exit 1
+          fi
+
+          echo "Flutter project:"
+          echo "$PROJECT"
+
+          echo "NEW_MOBILE_PROJECT=$PROJECT" >> "$GITHUB_ENV"
+
+      - name: Replace old mobile application
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "New mobile project:"
+          echo "$NEW_MOBILE_PROJECT"
+
+          echo
+          echo "Repository before replacement:"
+          ls -la
+
+          # -------------------------------------------------------
+          # IMPORTANT
+          #
+          # Only replace the mobile application.
+          # Backend files are NOT touched.
+          # -------------------------------------------------------
+
+          rm -rf assetflow_mobile
+
+          mkdir -p assetflow_mobile
+
+          cp -a "$NEW_MOBILE_PROJECT"/. assetflow_mobile/
+
+          echo
+          echo "New AssetFlow mobile application copied permanently."
+
+          test -f assetflow_mobile/pubspec.yaml
+
+          echo
+          echo "New mobile project:"
+          find assetflow_mobile -maxdepth 2 -type f | sort | head -300
+
+      - name: Remove temporary extracted directory
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf extracted_assetflow
+
+          echo "Temporary extraction directory removed."
+
+      - name: Verify backend was not removed
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Checking repository structure..."
+
+          if [ ! -f assetflow_mobile/pubspec.yaml ]; then
+            echo "ERROR: Mobile application missing."
+            exit 1
+          fi
+
+          echo "Mobile application exists."
+
+          echo
+          echo "Repository top-level:"
+          find . -maxdepth 2 -type f | sort | head -300
+
+      - name: Commit extracted mobile application
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add assetflow_mobile
+
+          if git diff --cached --quiet; then
+            echo "No mobile changes to commit."
+            exit 0
+          fi
+
+          git commit \
+            -m "Replace AssetFlow mobile app with new UI"
+
+          git push origin HEAD:master
+
+          echo
+          echo "=========================================="
+          echo "NEW MOBILE APP PERMANENTLY EXTRACTED"
+          echo "=========================================="
