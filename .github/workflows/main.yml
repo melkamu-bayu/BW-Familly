@@ -1,0 +1,148 @@
+name: Build AssetFlow APK - New UI
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ============================================================
+      # 1. CHECKOUT
+      # ============================================================
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ============================================================
+      # 2. JAVA 17
+      #
+      # IMPORTANT:
+      # Do NOT use cache: gradle here because the Flutter/Android
+      # project is inside the ZIP and has not been extracted yet.
+      # ============================================================
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # ============================================================
+      # 3. FLUTTER
+      # ============================================================
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.35.7"
+          channel: stable
+          cache: true
+
+      # ============================================================
+      # 4. EXTRACT NEW UI
+      # ============================================================
+      - name: Extract and install new mobile application
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ZIP="AssetFlow_mobile_final_home_ui.zip"
+
+          if [ ! -f "$ZIP" ]; then
+            echo "ERROR: $ZIP not found."
+            exit 1
+          fi
+
+          rm -rf extracted_ui
+          mkdir -p extracted_ui
+
+          unzip -q "$ZIP" -d extracted_ui
+
+          PROJECT="$(find extracted_ui \
+            -type f \
+            -name pubspec.yaml \
+            -print \
+            -quit | xargs -r dirname)"
+
+          if [ -z "$PROJECT" ]; then
+            echo "ERROR: No Flutter project found inside ZIP."
+            find extracted_ui -maxdepth 5 -type f | sort
+            exit 1
+          fi
+
+          echo "Flutter project found at: $PROJECT"
+
+          rm -rf assetflow_mobile
+          mkdir -p assetflow_mobile
+
+          cp -a "$PROJECT"/. assetflow_mobile/
+
+          test -f assetflow_mobile/pubspec.yaml
+
+          echo "New mobile application installed successfully."
+
+      # ============================================================
+      # 5. CONFIGURE PRODUCTION API
+      # ============================================================
+      - name: Configure production API
+        shell: bash
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          mkdir -p lib/core
+
+          cat > lib/core/config.dart <<'EOF'
+          class AppConfig {
+            AppConfig._();
+
+            static const String apiBaseUrl = String.fromEnvironment(
+              'API_BASE_URL',
+              defaultValue:
+                  'https://assetflow-api-f435.onrender.com/api/v1',
+            );
+
+            static const String defaultCurrency = 'ETB';
+
+            static const Duration idleLockTimeout = Duration(minutes: 15);
+          }
+          EOF
+
+      # ============================================================
+      # 6. PREPARE ANDROID
+      # ============================================================
+      - name: Prepare Android project
+        shell: bash
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          if [ ! -d "android" ] || \
+             [ ! -f "android/app/build.gradle.kts" ]; then
+
+            echo "Android project is incomplete."
+            echo "Creating Android platform..."
+
+            flutter create --platforms=android .
+          fi
+
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+
+          if [ ! -f "$MANIFEST" ]; then
+            echo "ERROR: AndroidManifest.xml not found."
+            exit 1
+          fi
+
+          if ! grep -q "android.permission.INTERNET" "$MANIFEST"; then
+            sed -i \
+              '/<manifest/a\    <uses-permission android:name="android.permission.INTERNET"/>' \
+              "$MANIFEST"
+          fi
+
+          echo "INTERNET permission:"
+          grep "android.permission.INTERNET" "$MANIFEST"
