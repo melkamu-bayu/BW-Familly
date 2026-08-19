@@ -83,15 +83,25 @@ def seed(db: Session) -> None:
             if exists is None:
                 db.add(Permission(role_id=roles[role_name].id, resource=resource, action=action))
 
-    # --- Admin user ---
+        # --- Admin user ---
     admin = db.query(User).filter(User.email == "admin@assetflow.app").one_or_none()
     if admin is None:
         admin = User(
-            full_name="System Administrator",
+            full_name="Admin User",
             email="admin@assetflow.app",
             password_hash=hash_password("ChangeMe123!"),
             role_id=roles["super_admin"].id,
         )
+        db.add(admin)
+    elif admin.full_name == "System Administrator":
+        # One-time self-correction: earlier seed runs created the admin with
+        # this placeholder name, which showed up in the app as "Hello, System"
+        # (the dashboard greets by first name). Since seed() only *creates*
+        # missing rows and never overwrites existing ones, changing the
+        # default above wouldn't have fixed an already-seeded database on its
+        # own -- this narrow check does, on the next deploy, without touching
+        # anything an admin may have deliberately renamed to something else.
+        admin.full_name = "Admin User"
         db.add(admin)
 
     # --- Default accounts ---
