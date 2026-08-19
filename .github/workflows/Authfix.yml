@@ -1,0 +1,162 @@
+name: AssetFlow - Fix #4 Authentication Session
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  auth-fix:
+    name: Authentication Session Fix
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.0"
+          channel: stable
+          cache: true
+
+      - name: Verify files
+        run: |
+          set -e
+
+          test -f assetflow_mobile/pubspec.yaml
+          test -f assetflow_mobile/lib/state/auth_provider.dart
+          test -f assetflow_mobile/lib/core/api_client.dart
+          test -f assetflow_mobile/lib/screens/dashboard/dashboard_screen.dart
+
+          echo "Files verified."
+
+      - name: Save protected file checksums
+        working-directory: assetflow_mobile
+        run: |
+          set -e
+
+          sha256sum lib/core/api_client.dart \
+            | awk '{print $1}' > /tmp/api.sha
+
+          sha256sum lib/screens/dashboard/dashboard_screen.dart \
+            | awk '{print $1}' > /tmp/dashboard.sha
+
+      - name: Replace session restore error handling
+        working-directory: assetflow_mobile
+        run: |
+          set -e
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          file = Path("lib/state/auth_provider.dart")
+          text = file.read_text()
+
+          old = """      } catch (_) {
+        await TokenStorage.instance.clear();
+        state = const AsyncData(null);
+      }"""
+
+          new = """      } on SessionExpiredException {
+        await TokenStorage.instance.clear();
+        state = const AsyncData(null);
+      } on DioException catch (e) {
+        final status = e.response?.statusCode;
+
+        if (status == 401) {
+          await TokenStorage.instance.clear();
+          state = const AsyncData(null);
+        } else {
+          state = AsyncError(e, StackTrace.current);
+        }
+      } catch (e, stack) {
+        state = AsyncError(e, stack);
+      }"""
+
+          if old not in text:
+              raise SystemExit(
+                  "Target catch block not found. No changes made."
+              )
+
+          text = text.replace(old, new, 1)
+
+          if "import 'package:dio/dio.dart';" not in text:
+              text = "import 'package:dio/dio.dart';\n" + text
+
+          file.write_text(text)
+
+          print("Authentication session handling updated.")
+          PY
+
+      - name: Verify protected files were not changed
+        working-directory: assetflow_mobile
+        run: |
+          set -e
+
+          API_BEFORE=$(cat /tmp/api.sha)
+          API_AFTER=$(sha256sum lib/core/api_client.dart | awk '{print $1}')
+
+          DASH_BEFORE=$(cat /tmp/dashboard.sha)
+          DASH_AFTER=$(sha256sum lib/screens/dashboard/dashboard_screen.dart | awk '{print $1}')
+
+          if [ "$API_BEFORE" != "$API_AFTER" ]; then
+            echo "ERROR: api_client.dart was changed."
+            exit 1
+          fi
+
+          if [ "$DASH_BEFORE" != "$DASH_AFTER" ]; then
+            echo "ERROR: dashboard_screen.dart was changed."
+            exit 1
+          fi
+
+          echo "API client unchanged."
+          echo "Dashboard unchanged."
+
+      - name: Flutter pub get
+        working-directory: assetflow_mobile
+        run: flutter pub get
+
+      - name: Format authentication provider
+        working-directory: assetflow_mobile
+        run: dart format lib/state/auth_provider.dart
+
+      - name: Analyze
+        working-directory: assetflow_mobile
+        run: |
+          flutter analyze \
+            --no-fatal-infos \
+            --no-fatal-warnings
+
+      - name: Verify authentication fix
+        working-directory: assetflow_mobile
+        run: |
+          set -e
+
+          grep -q "SessionExpiredException" \
+            lib/state/auth_provider.dart
+
+          grep -q "status == 401" \
+            lib/state/auth_provider.dart
+
+          grep -q "AsyncError" \
+            lib/state/auth_provider.dart
+
+          echo "Authentication session fix verified."
+
+      - name: Show changed files
+        run: |
+          git status --short
+
+          CHANGED=$(git status --porcelain | awk '{print substr($0,4)}')
+
+          for file in $CHANGED; do
+            if [ "$file" != "assetflow_mobile/lib/state/auth_provider.dart" ]; then
+              echo "ERROR: Unexpected file changed: $file"
+              exit 1
+            fi
+          done
+
+          echo "Only auth_provider.dart was changed."
