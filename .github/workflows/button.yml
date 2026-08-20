@@ -1,0 +1,705 @@
+name: Fix Back Button - All Inner Pages
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-back-buttons:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ============================================================
+      # 1. Checkout
+      # ============================================================
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      # ============================================================
+      # 2. Install Flutter
+      # ============================================================
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.35.7"
+          channel: stable
+          cache: true
+
+      # ============================================================
+      # 3. Verify Flutter project
+      # ============================================================
+      - name: Verify Flutter project
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          test -f pubspec.yaml
+          test -f lib/router.dart
+          test -f lib/widgets/nav_shell.dart
+
+          echo "Flutter project found."
+          flutter --version
+
+      # ============================================================
+      # 4. Apply Back button to ALL authenticated inner pages
+      # ============================================================
+      - name: Apply complete inner-page Back-button fix
+        working-directory: assetflow_mobile
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          ROOT = Path("lib")
+
+          GO_ROUTER_IMPORT = (
+              "import 'package:go_router/go_router.dart';"
+          )
+
+          # ==========================================================
+          # ONLY these authenticated inner pages receive Back.
+          #
+          # Login and Dashboard are intentionally excluded.
+          # ==========================================================
+
+          pages = {
+              "assets": (
+                  ROOT / "screens/assets/assets_hub_screen.dart",
+                  "/dashboard",
+              ),
+
+              "vehicles": (
+                  ROOT / "screens/vehicles/vehicles_list_screen.dart",
+                  "/assets",
+              ),
+
+              "vehicle_detail": (
+                  ROOT / "screens/vehicles/vehicle_detail_screen.dart",
+                  "/vehicles",
+              ),
+
+              "properties": (
+                  ROOT / "screens/properties/properties_list_screen.dart",
+                  "/assets",
+              ),
+
+              "property_detail": (
+                  ROOT / "screens/properties/property_detail_screen.dart",
+                  "/properties",
+              ),
+
+              "shop": (
+                  ROOT / "screens/shop/shop_screen.dart",
+                  "/assets",
+              ),
+
+              "gold_project": (
+                  ROOT / "screens/projects/gold_project_screen.dart",
+                  "/assets",
+              ),
+
+              "accounts": (
+                  ROOT / "screens/accounts/accounts_screen.dart",
+                  "/assets",
+              ),
+
+              "reports": (
+                  ROOT / "screens/reports/reports_screen.dart",
+                  "/dashboard",
+              ),
+
+              "notifications": (
+                  ROOT / "screens/notifications/notifications_screen.dart",
+                  "/dashboard",
+              ),
+
+              "settings": (
+                  ROOT / "screens/settings/settings_screen.dart",
+                  "/dashboard",
+              ),
+          }
+
+          def read(path):
+              return path.read_text(encoding="utf-8")
+
+          def write(path, text):
+              path.write_text(text, encoding="utf-8")
+
+          def add_import(path):
+              text = read(path)
+
+              if GO_ROUTER_IMPORT in text:
+                  return
+
+              lines = text.splitlines()
+
+              last_package_import = -1
+
+              for i, line in enumerate(lines):
+                  if line.startswith("import 'package:"):
+                      last_package_import = i
+
+              if last_package_import >= 0:
+                  lines.insert(
+                      last_package_import + 1,
+                      GO_ROUTER_IMPORT
+                  )
+              else:
+                  lines.insert(
+                      0,
+                      GO_ROUTER_IMPORT
+                  )
+
+              write(
+                  path,
+                  "\n".join(lines) + "\n"
+              )
+
+          def has_back_button(text):
+              return (
+                  "tooltip: 'Back'" in text
+                  and "context.canPop()" in text
+                  and "context.pop()" in text
+              )
+
+          def find_appbar(text):
+              match = re.search(
+                  r"\bappBar\s*:\s*AppBar\s*\(",
+                  text
+              )
+
+              if not match:
+                  return None
+
+              open_pos = text.find(
+                  "(",
+                  match.start()
+              )
+
+              depth = 0
+              in_string = False
+              string_char = None
+              escape = False
+
+              for i in range(
+                  open_pos,
+                  len(text)
+              ):
+                  c = text[i]
+
+                  if in_string:
+                      if escape:
+                          escape = False
+                      elif c == "\\":
+                          escape = True
+                      elif c == string_char:
+                          in_string = False
+                      continue
+
+                  if c in ("'", '"'):
+                      in_string = True
+                      string_char = c
+                      continue
+
+                  if c == "(":
+                      depth += 1
+
+                  elif c == ")":
+                      depth -= 1
+
+                      if depth == 0:
+                          end = i + 1
+
+                          if (
+                              end < len(text)
+                              and text[end] == ","
+                          ):
+                              end += 1
+
+                          return (
+                              match.start(),
+                              end
+                          )
+
+              return None
+
+          def add_back_button(path, fallback):
+              text = read(path)
+
+              if has_back_button(text):
+                  return False
+
+              appbar = find_appbar(text)
+
+              if not appbar:
+                  raise RuntimeError(
+                      f"Could not find AppBar in {path}. "
+                      "Workflow stopped to prevent an incomplete fix."
+                  )
+
+              start, end = appbar
+              block = text[start:end]
+
+              # Do not overwrite existing custom leading widgets.
+              if re.search(
+                  r"\bleading\s*:",
+                  block
+              ):
+                  raise RuntimeError(
+                      f"{path} already contains a custom leading widget. "
+                      "Manual review required."
+                  )
+
+              line_start = text.rfind(
+                  "\n",
+                  0,
+                  start
+              ) + 1
+
+              indent = text[
+                  line_start:start
+              ]
+
+              child_indent = indent + "  "
+              body_indent = indent + "    "
+
+              open_paren = block.find("(")
+              close_paren = block.rfind(")")
+
+              inner = block[
+                  open_paren + 1:
+                  close_paren
+              ].strip()
+
+              new_block = (
+                  f"{indent}appBar: AppBar(\n"
+                  f"{child_indent}leading: IconButton(\n"
+                  f"{body_indent}icon: const "
+                  f"Icon(Icons.arrow_back_rounded),\n"
+                  f"{body_indent}tooltip: 'Back',\n"
+                  f"{body_indent}onPressed: () {{\n"
+                  f"{body_indent}  if (context.canPop()) {{\n"
+                  f"{body_indent}    context.pop();\n"
+                  f"{body_indent}  }} else {{\n"
+                  f"{body_indent}    context.go('{fallback}');\n"
+                  f"{body_indent}  }}\n"
+                  f"{body_indent}}},\n"
+                  f"{child_indent}),\n"
+              )
+
+              if inner:
+                  new_block += (
+                      f"{indent}  {inner}\n"
+                  )
+
+              new_block += (
+                  f"{indent}),"
+              )
+
+              write(
+                  path,
+                  text[:start]
+                  + new_block
+                  + text[end:]
+              )
+
+              return True
+
+          # ==========================================================
+          # Protect router structure
+          # ==========================================================
+
+          router = ROOT / "router.dart"
+          router_text = read(router)
+
+          if "initialLocation: '/dashboard'" not in router_text:
+              raise RuntimeError(
+                  "ERROR: Dashboard is not initialLocation."
+              )
+
+          if "GoRoute(path: '/login'" not in router_text:
+              raise RuntimeError(
+                  "ERROR: Login route was not found."
+              )
+
+          print("")
+          print("Router protection verified.")
+          print("")
+
+          # ==========================================================
+          # Verify all expected files
+          # ==========================================================
+
+          for name, (path, fallback) in pages.items():
+              if not path.exists():
+                  raise RuntimeError(
+                      f"Missing required page: {path}"
+                  )
+
+              print(f"FOUND: {name} -> {path}")
+
+          # ==========================================================
+          # Dashboard must NOT get Back
+          # ==========================================================
+
+          dashboard = (
+              ROOT / "screens/dashboard/dashboard_screen.dart"
+          )
+
+          dashboard_text = read(dashboard)
+
+          if has_back_button(dashboard_text):
+              raise RuntimeError(
+                  "Dashboard must not contain a Back button."
+              )
+
+          print("Dashboard protected.")
+
+          # ==========================================================
+          # Login must NOT get Back
+          # ==========================================================
+
+          login = (
+              ROOT / "screens/auth/login_screen.dart"
+          )
+
+          if login.exists():
+              login_text = read(login)
+
+              if has_back_button(login_text):
+                  raise RuntimeError(
+                      "Login must not contain a Back button."
+                  )
+
+          print("Login protected.")
+
+          # ==========================================================
+          # Apply Back button to every inner page
+          # ==========================================================
+
+          changed = []
+          already_fixed = []
+
+          for name, (path, fallback) in pages.items():
+
+              add_import(path)
+
+              if add_back_button(
+                  path,
+                  fallback
+              ):
+                  changed.append(str(path))
+                  print(f"CHANGED: {path}")
+              else:
+                  already_fixed.append(str(path))
+                  print(f"ALREADY OK: {path}")
+
+          # ==========================================================
+          # Inner navigation must use PUSH
+          #
+          # Only change navigation from Assets/Settings to
+          # inner pages. Do not touch NavShell bottom navigation.
+          # ==========================================================
+
+          navigation_files = [
+              ROOT / "screens/assets/assets_hub_screen.dart",
+              ROOT / "screens/settings/settings_screen.dart",
+          ]
+
+          routes = [
+              "/vehicles",
+              "/properties",
+              "/shop",
+              "/gold-project",
+              "/accounts",
+              "/reports",
+          ]
+
+          for path in navigation_files:
+
+              if not path.exists():
+                  continue
+
+              text = read(path)
+              original = text
+
+              for route in routes:
+
+                  text = text.replace(
+                      f"context.go('{route}')",
+                      f"context.push('{route}')"
+                  )
+
+                  text = text.replace(
+                      f'context.go("{route}")',
+                      f'context.push("{route}")'
+                  )
+
+              if text != original:
+                  write(path, text)
+                  print(
+                      f"Navigation PUSH updated: {path}"
+                  )
+
+          print("")
+          print("======================================")
+          print("ALL INNER PAGE FIXES APPLIED")
+          print("======================================")
+          print(
+              f"Total inner pages: {len(pages)}"
+          )
+          print(
+              f"Changed: {len(changed)}"
+          )
+          print(
+              f"Already correct: {len(already_fixed)}"
+          )
+
+      # ============================================================
+      # 5. Verify every inner page
+      # ============================================================
+      - name: Verify ALL inner pages
+        working-directory: assetflow_mobile
+        shell: python
+        run: |
+          from pathlib import Path
+
+          pages = [
+              Path("lib/screens/assets/assets_hub_screen.dart"),
+              Path("lib/screens/vehicles/vehicles_list_screen.dart"),
+              Path("lib/screens/vehicles/vehicle_detail_screen.dart"),
+              Path("lib/screens/properties/properties_list_screen.dart"),
+              Path("lib/screens/properties/property_detail_screen.dart"),
+              Path("lib/screens/shop/shop_screen.dart"),
+              Path("lib/screens/projects/gold_project_screen.dart"),
+              Path("lib/screens/accounts/accounts_screen.dart"),
+              Path("lib/screens/reports/reports_screen.dart"),
+              Path("lib/screens/notifications/notifications_screen.dart"),
+              Path("lib/screens/settings/settings_screen.dart"),
+          ]
+
+          errors = []
+
+          for path in pages:
+
+              if not path.exists():
+                  errors.append(
+                      f"{path}: FILE MISSING"
+                  )
+                  continue
+
+              text = path.read_text(
+                  encoding="utf-8"
+              )
+
+              if "tooltip: 'Back'" not in text:
+                  errors.append(
+                      f"{path}: Back button missing"
+                  )
+
+              if "context.canPop()" not in text:
+                  errors.append(
+                      f"{path}: context.canPop() missing"
+                  )
+
+              if "context.pop()" not in text:
+                  errors.append(
+                      f"{path}: context.pop() missing"
+                  )
+
+              if "package:go_router/go_router.dart" not in text:
+                  errors.append(
+                      f"{path}: go_router import missing"
+                  )
+
+          if errors:
+
+              print("ERRORS FOUND:")
+
+              for error in errors:
+                  print(f"  - {error}")
+
+              raise SystemExit(1)
+
+          print("")
+          print(
+              "SUCCESS: ALL 11 INNER PAGES "
+              "HAVE BACK BUTTONS."
+          )
+
+      # ============================================================
+      # 6. Verify Dashboard and Login
+      # ============================================================
+      - name: Verify Dashboard and Login protection
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          if grep -q "tooltip: 'Back'" \
+            lib/screens/dashboard/dashboard_screen.dart; then
+            echo "ERROR: Dashboard contains Back button."
+            exit 1
+          fi
+
+          if grep -q "tooltip: 'Back'" \
+            lib/screens/auth/login_screen.dart; then
+            echo "ERROR: Login contains Back button."
+            exit 1
+          fi
+
+          grep -q \
+            "initialLocation: '/dashboard'" \
+            lib/router.dart
+
+          echo "Dashboard and Login protection passed."
+
+      # ============================================================
+      # 7. Correct NavShell verification
+      #
+      # IMPORTANT:
+      # nav_shell.dart contains the word PopScope in a COMMENT.
+      # Therefore grep "PopScope" is WRONG.
+      #
+      # We remove comments first and only detect an actual
+      # PopScope widget.
+      # ============================================================
+      - name: Verify NavShell
+        working-directory: assetflow_mobile
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          path = Path("lib/widgets/nav_shell.dart")
+          text = path.read_text(
+              encoding="utf-8"
+          )
+
+          # Remove // comments.
+          code = re.sub(
+              r"//.*",
+              "",
+              text
+          )
+
+          # Remove /* ... */ comments.
+          code = re.sub(
+              r"/\*.*?\*/",
+              "",
+              code,
+              flags=re.S
+          )
+
+          # Detect actual PopScope widget only.
+          if re.search(
+              r"\bPopScope\s*\(",
+              code
+          ):
+              raise SystemExit(
+                  "ERROR: Actual PopScope widget found in NavShell."
+              )
+
+          print(
+              "NavShell verified: no actual PopScope widget."
+          )
+
+      # ============================================================
+      # 8. Verify inner navigation uses PUSH
+      # ============================================================
+      - name: Verify inner navigation
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          FILE="lib/screens/assets/assets_hub_screen.dart"
+
+          grep -q "context.push('/vehicles')" "$FILE"
+          grep -q "context.push('/properties')" "$FILE"
+          grep -q "context.push('/shop')" "$FILE"
+          grep -q "context.push('/gold-project')" "$FILE"
+          grep -q "context.push('/accounts')" "$FILE"
+          grep -q "context.push('/reports')" "$FILE"
+
+          SETTINGS="lib/screens/settings/settings_screen.dart"
+
+          grep -q "context.push('/properties')" "$SETTINGS"
+          grep -q "context.push('/shop')" "$SETTINGS"
+          grep -q "context.push('/gold-project')" "$SETTINGS"
+          grep -q "context.push('/accounts')" "$SETTINGS"
+          grep -q "context.push('/reports')" "$SETTINGS"
+
+          echo "Inner navigation PUSH verification passed."
+
+      # ============================================================
+      # 9. Format
+      # ============================================================
+      - name: Format Dart files
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          dart format lib
+
+      # ============================================================
+      # 10. Dependencies
+      # ============================================================
+      - name: Get dependencies
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          flutter pub get
+
+      # ============================================================
+      # 11. Analyze
+      # ============================================================
+      - name: Run Flutter analyze
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          flutter analyze
+
+      # ============================================================
+      # 12. Show changes
+      # ============================================================
+      - name: Show changed files
+        run: |
+          set -euo pipefail
+
+          echo "Git status:"
+          git status --short
+
+          echo ""
+          echo "Git diff:"
+          git diff --stat
+
+      # ============================================================
+      # 13. Commit and push
+      # ============================================================
+      - name: Commit and push
+        run: |
+          set -euo pipefail
+
+          git config user.name \
+            "github-actions[bot]"
+
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet; then
+            echo "No changes were necessary."
+            exit 0
+          fi
+
+          git add assetflow_mobile/lib
+
+          git commit \
+            -m "Fix back navigation for all inner pages"
+
+          git push origin master
