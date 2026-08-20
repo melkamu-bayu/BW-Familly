@@ -101,17 +101,60 @@ class _AddTransactionSheetState extends ConsumerState<AddTransactionSheet> {
             ),
             const SizedBox(height: 12),
             accountsAsync.when(
-              loading: () => const LinearProgressIndicator(),
-              error: (err, _) => const Text('Could not load accounts'),
-              data: (accounts) => DropdownButtonFormField<String>(
-                value: _selectedAccountId,
-                decoration: const InputDecoration(labelText: 'Account'),
-                items: accounts
-                    .map((a) => DropdownMenuItem(value: a.id, child: Text('${a.name} (${a.accountType})')))
-                    .toList(),
-                onChanged: (v) => setState(() => _selectedAccountId = v),
-              ),
-            ),
+  loading: () => const Padding(
+    padding: EdgeInsets.symmetric(vertical: 8),
+    child: LinearProgressIndicator(),
+  ),
+
+  error: (err, _) => Text(
+    'Unable to load accounts: $err',
+    style: const TextStyle(color: Colors.red),
+  ),
+
+  data: (accounts) {
+    if (accounts.isEmpty) {
+      return const InputDecorator(
+        decoration: InputDecoration(
+          labelText: 'Account *',
+          border: OutlineInputBorder(),
+          prefixIcon: Icon(Icons.account_balance_outlined),
+        ),
+        child: Text(
+          'No accounts available. Please create an account first.',
+          style: TextStyle(color: Colors.red),
+        ),
+      );
+    }
+
+    return DropdownButtonFormField<String>(
+      initialValue: _selectedAccountId,
+      decoration: const InputDecoration(
+        labelText: 'Account *',
+        border: OutlineInputBorder(),
+        prefixIcon: Icon(Icons.account_balance_outlined),
+      ),
+      items: accounts.map((account) {
+        return DropdownMenuItem<String>(
+          value: account.id,
+          child: Text(
+            '${account.name} (${account.accountType})',
+          ),
+        );
+      }).toList(),
+      onChanged: (value) {
+        setState(() {
+          _selectedAccountId = value;
+        });
+      },
+      validator: (value) {
+        if (value == null || value.isEmpty) {
+          return 'Please select an account';
+        }
+        return null;
+      },
+    );
+  },
+),
             const SizedBox(height: 12),
             _BusinessUnitPicker(
               selectedId: _selectedBusinessUnitId,
