@@ -1,0 +1,579 @@
+name: Fix Back Button - All Inner Pages
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-back-buttons:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.35.7"
+          channel: stable
+          cache: true
+
+      - name: Verify Flutter project
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          test -f pubspec.yaml
+          test -f lib/router.dart
+
+          echo "Flutter project found."
+          flutter --version
+
+      - name: Apply complete inner-page back-button fix
+        working-directory: assetflow_mobile
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          ROOT = Path("lib")
+
+          def read(path):
+              return path.read_text(encoding="utf-8")
+
+          def write(path, text):
+              path.write_text(text, encoding="utf-8")
+
+          def add_import(path, import_line):
+              text = read(path)
+
+              if import_line in text:
+                  return
+
+              lines = text.splitlines()
+
+              # Put package imports before relative imports.
+              last_package = -1
+              for i, line in enumerate(lines):
+                  if line.startswith("import 'package:"):
+                      last_package = i
+
+              if last_package >= 0:
+                  lines.insert(last_package + 1, import_line)
+              else:
+                  lines.insert(0, import_line)
+
+              write(path, "\n".join(lines) + "\n")
+
+          def replace_once(path, old, new):
+              text = read(path)
+
+              if new in text:
+                  return False
+
+              if old not in text:
+                  raise RuntimeError(
+                      f"Expected code was not found in {path}: {old}"
+                  )
+
+              text = text.replace(old, new, 1)
+              write(path, text)
+              return True
+
+          # ------------------------------------------------------------
+          # 1. Assets Hub
+          # Inner destinations must PUSH so Back returns to Assets.
+          # ------------------------------------------------------------
+          assets = ROOT / "screens/assets/assets_hub_screen.dart"
+
+          add_import(
+              assets,
+              "import 'package:go_router/go_router.dart';"
+          )
+
+          assets_text = read(assets)
+
+          for route in [
+              "/vehicles",
+              "/properties",
+              "/shop",
+              "/gold-project",
+              "/accounts",
+              "/reports",
+          ]:
+              assets_text = assets_text.replace(
+                  f"context.go('{route}')",
+                  f"context.push('{route}')"
+              )
+
+          write(assets, assets_text)
+
+          # ------------------------------------------------------------
+          # 2. Settings
+          # Inner destinations must PUSH so Back returns to Settings.
+          # ------------------------------------------------------------
+          settings = ROOT / "screens/settings/settings_screen.dart"
+
+          # go_router is already imported in the current repository,
+          # but this keeps the workflow safe if the file changes later.
+          add_import(
+              settings,
+              "import 'package:go_router/go_router.dart';"
+          )
+
+          settings_text = read(settings)
+
+          for route in [
+              "/properties",
+              "/shop",
+              "/gold-project",
+              "/accounts",
+              "/reports",
+          ]:
+              settings_text = settings_text.replace(
+                  f"context.go('{route}')",
+                  f"context.push('{route}')"
+              )
+
+          write(settings, settings_text)
+
+          # ------------------------------------------------------------
+          # Standard explicit Back-button AppBar
+          # ------------------------------------------------------------
+          def add_back_button(path, title, fallback):
+              add_import(
+                  path,
+                  "import 'package:go_router/go_router.dart';"
+              )
+
+              text = read(path)
+
+              # Already fixed.
+              if "tooltip: 'Back'" in text and "context.canPop()" in text:
+                  return
+
+              # Exact simple AppBar used by several current screens.
+              simple = f"appBar: AppBar(title: const Text('{title}')),"
+
+              replacement = f"""appBar: AppBar(
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_rounded),
+            tooltip: 'Back',
+            onPressed: () {{
+              if (context.canPop()) {{
+                context.pop();
+              }} else {{
+                context.go('{fallback}');
+              }}
+            }},
+          ),
+          title: const Text('{title}'),
+        ),"""
+
+              if simple in text:
+                  text = text.replace(simple, replacement, 1)
+                  write(path, text)
+                  return
+
+              raise RuntimeError(
+                  f"Could not find expected AppBar in {path}. "
+                  f"Expected: {simple}"
+              )
+
+          # ------------------------------------------------------------
+          # 3. Vehicles list
+          # ------------------------------------------------------------
+          vehicles = ROOT / "screens/vehicles/vehicles_list_screen.dart"
+          add_back_button(
+              vehicles,
+              "Vehicles",
+              "/assets"
+          )
+
+          # ------------------------------------------------------------
+          # 4. Vehicle detail
+          # ------------------------------------------------------------
+          vehicle_detail = ROOT / "screens/vehicles/vehicle_detail_screen.dart"
+
+          add_import(
+              vehicle_detail,
+              "import 'package:go_router/go_router.dart';"
+          )
+
+          text = read(vehicle_detail)
+
+          if "tooltip: 'Back'" not in text:
+              old = "appBar: AppBar(title: Text(vehicle?.name ?? 'Vehicle')),"
+
+              new = """appBar: AppBar(
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_rounded),
+            tooltip: 'Back',
+            onPressed: () {
+              if (context.canPop()) {
+                context.pop();
+              } else {
+                context.go('/vehicles');
+              }
+            },
+          ),
+          title: Text(vehicle?.name ?? 'Vehicle'),
+        ),"""
+
+              if old not in text:
+                  raise RuntimeError(
+                      "Vehicle detail AppBar was not found."
+                  )
+
+              text = text.replace(old, new, 1)
+              write(vehicle_detail, text)
+
+          # ------------------------------------------------------------
+          # 5. Properties list
+          # ------------------------------------------------------------
+          properties = ROOT / "screens/properties/properties_list_screen.dart"
+
+          add_back_button(
+              properties,
+              "Properties",
+              "/assets"
+          )
+
+          # ------------------------------------------------------------
+          # 6. Property detail
+          # ------------------------------------------------------------
+          property_detail = ROOT / "screens/properties/property_detail_screen.dart"
+
+          add_import(
+              property_detail,
+              "import 'package:go_router/go_router.dart';"
+          )
+
+          text = read(property_detail)
+
+          if "tooltip: 'Back'" not in text:
+              old = "appBar: AppBar(title: Text(property?.name ?? 'Property')),"
+              
+              new = """appBar: AppBar(
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_rounded),
+            tooltip: 'Back',
+            onPressed: () {
+              if (context.canPop()) {
+                context.pop();
+              } else {
+                context.go('/properties');
+              }
+            },
+          ),
+          title: Text(property?.name ?? 'Property'),
+        ),"""
+
+              if old not in text:
+                  raise RuntimeError(
+                      "Property detail AppBar was not found."
+                  )
+
+              text = text.replace(old, new, 1)
+              write(property_detail, text)
+
+          # ------------------------------------------------------------
+          # 7. Shop
+          # ------------------------------------------------------------
+          shop = ROOT / "screens/shop/shop_screen.dart"
+
+          add_import(
+              shop,
+              "import 'package:go_router/go_router.dart';"
+          )
+
+          text = read(shop)
+
+          if "tooltip: 'Back'" not in text:
+              old = """appBar: AppBar(
+          title: const Text('Construction Materials Shop'),"""
+
+              new = """appBar: AppBar(
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_rounded),
+            tooltip: 'Back',
+            onPressed: () {
+              if (context.canPop()) {
+                context.pop();
+              } else {
+                context.go('/assets');
+              }
+            },
+          ),
+          title: const Text('Construction Materials Shop'),"""
+
+              if old not in text:
+                  raise RuntimeError(
+                      "Shop AppBar was not found."
+                  )
+
+              text = text.replace(old, new, 1)
+              write(shop, text)
+
+          # ------------------------------------------------------------
+          # 8. Gold Project
+          # ------------------------------------------------------------
+          gold = ROOT / "screens/projects/gold_project_screen.dart"
+
+          add_import(
+              gold,
+              "import 'package:go_router/go_router.dart';"
+          )
+
+          text = read(gold)
+
+          if "tooltip: 'Back'" not in text:
+              old = "appBar: AppBar(title: const Text('Gold-Mining Project')),"
+
+              new = """appBar: AppBar(
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_rounded),
+            tooltip: 'Back',
+            onPressed: () {
+              if (context.canPop()) {
+                context.pop();
+              } else {
+                context.go('/assets');
+              }
+            },
+          ),
+          title: const Text('Gold-Mining Project'),
+        ),"""
+
+              if old not in text:
+                  raise RuntimeError(
+                      "Gold Project AppBar was not found."
+                  )
+
+              text = text.replace(old, new, 1)
+              write(gold, text)
+
+          # ------------------------------------------------------------
+          # 9. Accounts
+          # ------------------------------------------------------------
+          accounts = ROOT / "screens/accounts/accounts_screen.dart"
+
+          add_import(
+              accounts,
+              "import 'package:go_router/go_router.dart';"
+          )
+
+          text = read(accounts)
+
+          if "tooltip: 'Back'" not in text:
+              old = """appBar: AppBar(
+          title: const Text('Accounts'),"""
+
+              new = """appBar: AppBar(
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_rounded),
+            tooltip: 'Back',
+            onPressed: () {
+              if (context.canPop()) {
+                context.pop();
+              } else {
+                context.go('/assets');
+              }
+            },
+          ),
+          title: const Text('Accounts'),"""
+
+              if old not in text:
+                  raise RuntimeError(
+                      "Accounts AppBar was not found."
+                  )
+
+              text = text.replace(old, new, 1)
+              write(accounts, text)
+
+          # ------------------------------------------------------------
+          # 10. Reports
+          # ------------------------------------------------------------
+          reports = ROOT / "screens/reports/reports_screen.dart"
+
+          add_import(
+              reports,
+              "import 'package:go_router/go_router.dart';"
+          )
+
+          text = read(reports)
+
+          if "tooltip: 'Back'" not in text:
+              old = "appBar: AppBar(title: const Text('Reports & Analytics')),"
+
+              new = """appBar: AppBar(
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_rounded),
+            tooltip: 'Back',
+            onPressed: () {
+              if (context.canPop()) {
+                context.pop();
+              } else {
+                context.go('/dashboard');
+              }
+            },
+          ),
+          title: const Text('Reports & Analytics'),
+        ),"""
+
+              if old not in text:
+                  raise RuntimeError(
+                      "Reports AppBar was not found."
+                  )
+
+              text = text.replace(old, new, 1)
+              write(reports, text)
+
+          # ------------------------------------------------------------
+          # 11. Notifications
+          # ------------------------------------------------------------
+          notifications = ROOT / "screens/notifications/notifications_screen.dart"
+
+          add_import(
+              notifications,
+              "import 'package:go_router/go_router.dart';"
+          )
+
+          text = read(notifications)
+
+          if "tooltip: 'Back'" not in text:
+              old = "appBar: AppBar(title: const Text('Notifications')),"
+
+              new = """appBar: AppBar(
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_rounded),
+            tooltip: 'Back',
+            onPressed: () {
+              if (context.canPop()) {
+                context.pop();
+              } else {
+                context.go('/dashboard');
+              }
+            },
+          ),
+          title: const Text('Notifications'),
+        ),"""
+
+              if old not in text:
+                  raise RuntimeError(
+                      "Notifications AppBar was not found."
+                  )
+
+              text = text.replace(old, new, 1)
+              write(notifications, text)
+
+          print("All inner-page back-button changes applied successfully.")
+
+      - name: Protect Dashboard and NavShell
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          # Dashboard must remain the first page.
+          grep -q "initialLocation: '/dashboard'" lib/router.dart
+
+          # NavShell must not be modified to intercept Back.
+          if grep -q "PopScope" lib/widgets/nav_shell.dart; then
+            echo "ERROR: PopScope detected in NavShell."
+            exit 1
+          fi
+
+          echo "Dashboard and NavShell checks passed."
+
+      - name: Verify navigation rules
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          echo "Checking inner-page push navigation..."
+
+          grep -q "context.push('/vehicles')" \
+            lib/screens/assets/assets_hub_screen.dart
+
+          grep -q "context.push('/properties')" \
+            lib/screens/assets/assets_hub_screen.dart
+
+          grep -q "context.push('/shop')" \
+            lib/screens/assets/assets_hub_screen.dart
+
+          grep -q "context.push('/gold-project')" \
+            lib/screens/assets/assets_hub_screen.dart
+
+          grep -q "context.push('/properties')" \
+            lib/screens/settings/settings_screen.dart
+
+          grep -q "context.push('/shop')" \
+            lib/screens/settings/settings_screen.dart
+
+          grep -q "context.push('/gold-project')" \
+            lib/screens/settings/settings_screen.dart
+
+          grep -q "context.push('/accounts')" \
+            lib/screens/settings/settings_screen.dart
+
+          grep -q "context.push('/reports')" \
+            lib/screens/settings/settings_screen.dart
+
+          echo "Navigation rules verified."
+
+      - name: Format Dart files
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+          dart format lib
+
+      - name: Get dependencies
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+          flutter pub get
+
+      - name: Run Flutter analyze
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+          flutter analyze
+
+      - name: Show changed files
+        run: |
+          git status --short
+          git diff --stat
+
+      - name: Commit and push
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet; then
+            echo "No changes were necessary."
+            exit 0
+          fi
+
+          git add \
+            assetflow_mobile/lib/screens/assets/assets_hub_screen.dart \
+            assetflow_mobile/lib/screens/vehicles/vehicles_list_screen.dart \
+            assetflow_mobile/lib/screens/vehicles/vehicle_detail_screen.dart \
+            assetflow_mobile/lib/screens/properties/properties_list_screen.dart \
+            assetflow_mobile/lib/screens/properties/property_detail_screen.dart \
+            assetflow_mobile/lib/screens/shop/shop_screen.dart \
+            assetflow_mobile/lib/screens/projects/gold_project_screen.dart \
+            assetflow_mobile/lib/screens/accounts/accounts_screen.dart \
+            assetflow_mobile/lib/screens/reports/reports_screen.dart \
+            assetflow_mobile/lib/screens/notifications/notifications_screen.dart \
+            assetflow_mobile/lib/screens/settings/settings_screen.dart
+
+          git commit -m "Fix back navigation for all inner pages"
+          git push origin master
