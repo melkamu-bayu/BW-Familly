@@ -175,13 +175,29 @@ class Account {
     required this.currency,
   });
 
-  factory Account.fromJson(Map<String, dynamic> json) => Account(
-        id: json['id'] as String,
-        name: json['name'] as String,
-        accountType: json['account_type'] as String,
-        currentBalance: (json['current_balance'] as num).toDouble(),
-        currency: json['currency'] as String,
-      );
+  factory Account.fromJson(Map<String, dynamic> json) {
+    final rawBalance =
+        json['current_balance'] ??
+        json['balance'] ??
+        json['starting_balance'] ??
+        0;
+
+    return Account(
+      id: json['id']?.toString() ?? '',
+      name: json['name']?.toString() ?? 'Unnamed Account',
+      accountType:
+          json['account_type']?.toString() ??
+          json['type']?.toString() ??
+          'other',
+      currentBalance: rawBalance is num
+          ? rawBalance.toDouble()
+          : double.tryParse(rawBalance.toString()) ?? 0.0,
+      currency:
+          json['currency']?.toString() ??
+          json['currency_code']?.toString() ??
+          'ETB',
+    );
+  }
 }
 
 class Property {
