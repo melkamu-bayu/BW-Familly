@@ -33,35 +33,96 @@ class _AddTransactionSheetState extends ConsumerState<AddTransactionSheet> {
   final _expenseCategories = const ['fuel', 'maintenance', 'spare_parts', 'salary', 'inventory_purchase', 'utility', 'other'];
 
   Future<void> _save() async {
-    if (_selectedAccountId == null || _selectedBusinessUnitId == null || _amountController.text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please fill in all required fields')));
-      return;
-    }
+  final amountText = _amountController.text.trim();
+  final amount = double.tryParse(amountText);
 
-    setState(() => _saving = true);
+  // Validate every required field before saving.
+  if (_selectedAccountId == null || _selectedAccountId!.isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Please select an account'),
+      ),
+    );
+    return;
+  }
 
-    final payload = {
+  if (_selectedBusinessUnitId == null ||
+      _selectedBusinessUnitId!.isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Please select a business unit'),
+      ),
+    );
+    return;
+  }
+
+  if (amount == null || amount <= 0) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Please enter a valid amount greater than zero'),
+      ),
+    );
+    return;
+  }
+
+  if (_saving) return;
+
+  setState(() {
+    _saving = true;
+  });
+
+  try {
+    final payload = <String, dynamic>{
       'business_unit_id': _selectedBusinessUnitId,
       'account_id': _selectedAccountId,
       'category': _category,
-      'description': _descriptionController.text.isEmpty ? null : _descriptionController.text,
-      'amount': double.tryParse(_amountController.text) ?? 0,
+      'description': _descriptionController.text.trim().isEmpty
+          ? null
+          : _descriptionController.text.trim(),
+      'amount': amount,
       'currency': 'ETB',
       'txn_date': DateTime.now().toIso8601String().split('T').first,
     };
 
     await OutboxRepository.instance.enqueue(
-      entityType: widget.kind == TransactionKind.revenue ? 'revenue' : 'expense',
+      entityType:
+          widget.kind == TransactionKind.revenue ? 'revenue' : 'expense',
       payload: payload,
     );
 
-    // Attempt an immediate push (no-op if offline; SyncService will retry on reconnect).
-    SyncService.instance.pushOutbox();
+    // Push immediately when online.
+    // SyncService continues retrying when connectivity returns.
+    await SyncService.instance.pushOutbox();
 
     if (!mounted) return;
-    setState(() => _saving = false);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          widget.kind == TransactionKind.revenue
+              ? 'Revenue saved successfully'
+              : 'Expense saved successfully',
+        ),
+      ),
+    );
+
     Navigator.of(context).pop(true);
+  } catch (e) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Unable to save transaction: $e'),
+      ),
+    );
+  } finally {
+    if (mounted) {
+      setState(() {
+        _saving = false;
+      });
+    }
   }
+}
 
   @override
   Widget build(BuildContext context) {
