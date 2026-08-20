@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../core/theme.dart';
 import '../screens/transactions/add_transaction_sheet.dart';
 import '../state/auth_provider.dart';
+import 'package:flutter/services.dart';
 
 class NavShell extends ConsumerWidget {
   final Widget child;
