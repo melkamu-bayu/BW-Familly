@@ -5,16 +5,33 @@ import 'package:go_router/go_router.dart';
 import '../core/theme.dart';
 import '../screens/transactions/add_transaction_sheet.dart';
 import '../state/auth_provider.dart';
-import 'package:flutter/services.dart';
 
 class NavShell extends ConsumerWidget {
   final Widget child;
-  const NavShell({super.key, required this.child});
+
+  const NavShell({
+    super.key,
+    required this.child,
+  });
 
   int _indexFor(String path) {
-    if (path.startsWith('/assets') || path.startsWith('/vehicles') || path.startsWith('/properties') || path.startsWith('/shop') || path.startsWith('/gold-project') || path.startsWith('/accounts')) return 1;
-    if (path.startsWith('/reports')) return 3;
-    if (path.startsWith('/settings')) return 4;
+    if (path.startsWith('/assets') ||
+        path.startsWith('/vehicles') ||
+        path.startsWith('/properties') ||
+        path.startsWith('/shop') ||
+        path.startsWith('/gold-project') ||
+        path.startsWith('/accounts')) {
+      return 1;
+    }
+
+    if (path.startsWith('/reports')) {
+      return 3;
+    }
+
+    if (path.startsWith('/settings')) {
+      return 4;
+    }
+
     return 0;
   }
 
@@ -24,20 +41,16 @@ class NavShell extends ConsumerWidget {
     final selected = _indexFor(path);
     final canRecord = ref.watch(authProvider).canRecordTransactions;
 
-    return PopScope(
-  canPop: false,
-  onPopInvokedWithResult: (didPop, result) async {
-    if (didPop) return;
+    // IMPORTANT:
+    // Do NOT use PopScope here.
+    //
+    // This widget is the ShellRoute parent. The actual pages are inside
+    // the ShellRoute's nested navigator. Flutter/GoRouter must be allowed
+    // to pop those inner routes normally.
+    return Scaffold(
+      body: child,
 
-    if (context.canPop()) {
-      context.pop();
-    } else {
-      await SystemNavigator.pop();
-    }
-  },
-  child: Scaffold(
-    body: child,
-    bottomNavigationBar: SafeArea(
+      bottomNavigationBar: SafeArea(
         top: false,
         child: Container(
           height: 78,
@@ -46,16 +59,40 @@ class NavShell extends ConsumerWidget {
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: const Color(0xFFE8ECF3)),
-            boxShadow: const [BoxShadow(color: Color(0x160B2A66), blurRadius: 22, offset: Offset(0, 8))],
+            border: Border.all(
+              color: const Color(0xFFE8ECF3),
+            ),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x160B2A66),
+                blurRadius: 22,
+                offset: Offset(0, 8),
+              ),
+            ],
           ),
           child: Row(
             children: [
-              _NavItem(icon: Icons.home_outlined, selectedIcon: Icons.home_rounded, label: 'Home', selected: selected == 0, onTap: () => context.go('/dashboard')),
-              _NavItem(icon: Icons.business_center_outlined, selectedIcon: Icons.business_center, label: 'Assets', selected: selected == 1, onTap: () => context.go('/assets')),
+              _NavItem(
+                icon: Icons.home_outlined,
+                selectedIcon: Icons.home_rounded,
+                label: 'Home',
+                selected: selected == 0,
+                onTap: () => context.go('/dashboard'),
+              ),
+
+              _NavItem(
+                icon: Icons.business_center_outlined,
+                selectedIcon: Icons.business_center,
+                label: 'Assets',
+                selected: selected == 1,
+                onTap: () => context.go('/assets'),
+              ),
+
               Expanded(
                 child: GestureDetector(
-                  onTap: canRecord ? () => _showAdd(context) : null,
+                  onTap: canRecord
+                      ? () => _showAdd(context)
+                      : null,
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
@@ -65,28 +102,60 @@ class NavShell extends ConsumerWidget {
                           width: 48,
                           height: 48,
                           decoration: BoxDecoration(
-                            color: canRecord ? AppTheme.blue : const Color(0xFFD8DEE8),
+                            color: canRecord
+                                ? AppTheme.blue
+                                : const Color(0xFFD8DEE8),
                             shape: BoxShape.circle,
-                            boxShadow: const [BoxShadow(color: Color(0x250B2A66), blurRadius: 14, offset: Offset(0, 6))],
+                            boxShadow: const [
+                              BoxShadow(
+                                color: Color(0x250B2A66),
+                                blurRadius: 14,
+                                offset: Offset(0, 6),
+                              ),
+                            ],
                           ),
-                          child: const Icon(Icons.add_rounded, color: Colors.white, size: 30),
+                          child: const Icon(
+                            Icons.add_rounded,
+                            color: Colors.white,
+                            size: 30,
+                          ),
                         ),
                       ),
                       Transform.translate(
                         offset: const Offset(0, -10),
-                        child: const Text('Add', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppTheme.muted)),
+                        child: const Text(
+                          'Add',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: AppTheme.muted,
+                          ),
+                        ),
                       ),
                     ],
                   ),
                 ),
               ),
-              _NavItem(icon: Icons.bar_chart_outlined, selectedIcon: Icons.bar_chart_rounded, label: 'Reports', selected: selected == 3, onTap: () => context.go('/reports')),
-              _NavItem(icon: Icons.person_outline_rounded, selectedIcon: Icons.person_rounded, label: 'Profile', selected: selected == 4, onTap: () => context.go('/settings')),
+
+              _NavItem(
+                icon: Icons.bar_chart_outlined,
+                selectedIcon: Icons.bar_chart_rounded,
+                label: 'Reports',
+                selected: selected == 3,
+                onTap: () => context.go('/reports'),
+              ),
+
+              _NavItem(
+                icon: Icons.person_outline_rounded,
+                selectedIcon: Icons.person_rounded,
+                label: 'Profile',
+                selected: selected == 4,
+                onTap: () => context.go('/settings'),
+              ),
             ],
           ),
         ),
       ),
-    ),
     );
   }
 
@@ -94,26 +163,91 @@ class NavShell extends ConsumerWidget {
     final kind = await showModalBottomSheet<TransactionKind>(
       context: context,
       showDragHandle: true,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      builder: (sheetContext) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            const Text('Add to AssetFlow', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: AppTheme.ink)),
-            const SizedBox(height: 10),
-            ListTile(leading: const CircleAvatar(backgroundColor: Color(0x1535C759), child: Icon(Icons.arrow_downward, color: AppTheme.green)), title: const Text('Add Income'), onTap: () => Navigator.pop(sheetContext, TransactionKind.revenue)),
-            ListTile(leading: const CircleAvatar(backgroundColor: Color(0x15E94B5F), child: Icon(Icons.arrow_upward, color: AppTheme.red)), title: const Text('Add Expense'), onTap: () => Navigator.pop(sheetContext, TransactionKind.expense)),
-          ]),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(24),
         ),
       ),
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(
+              20,
+              8,
+              20,
+              24,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'Add to AssetFlow',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                    color: AppTheme.ink,
+                  ),
+                ),
+
+                const SizedBox(height: 10),
+
+                ListTile(
+                  leading: const CircleAvatar(
+                    backgroundColor: Color(0x1535C759),
+                    child: Icon(
+                      Icons.arrow_downward,
+                      color: AppTheme.green,
+                    ),
+                  ),
+                  title: const Text('Add Income'),
+                  onTap: () {
+                    Navigator.pop(
+                      sheetContext,
+                      TransactionKind.revenue,
+                    );
+                  },
+                ),
+
+                ListTile(
+                  leading: const CircleAvatar(
+                    backgroundColor: Color(0x15E94B5F),
+                    child: Icon(
+                      Icons.arrow_upward,
+                      color: AppTheme.red,
+                    ),
+                  ),
+                  title: const Text('Add Expense'),
+                  onTap: () {
+                    Navigator.pop(
+                      sheetContext,
+                      TransactionKind.expense,
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
 
-    if (kind == null || !context.mounted) return;
+    if (kind == null || !context.mounted) {
+      return;
+    }
+
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      builder: (_) => AddTransactionSheet(kind: kind),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(24),
+        ),
+      ),
+      builder: (_) {
+        return AddTransactionSheet(
+          kind: kind,
+        );
+      },
     );
   }
 }
@@ -125,7 +259,13 @@ class _NavItem extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
 
-  const _NavItem({required this.icon, required this.selectedIcon, required this.label, required this.selected, required this.onTap});
+  const _NavItem({
+    required this.icon,
+    required this.selectedIcon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -136,9 +276,26 @@ class _NavItem extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(selected ? selectedIcon : icon, color: selected ? AppTheme.blue : AppTheme.muted, size: 24),
+            Icon(
+              selected ? selectedIcon : icon,
+              color: selected
+                  ? AppTheme.blue
+                  : AppTheme.muted,
+              size: 24,
+            ),
             const SizedBox(height: 4),
-            Text(label, style: TextStyle(fontSize: 10.5, fontWeight: selected ? FontWeight.w800 : FontWeight.w500, color: selected ? AppTheme.blue : AppTheme.muted)),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 10.5,
+                fontWeight: selected
+                    ? FontWeight.w800
+                    : FontWeight.w500,
+                color: selected
+                    ? AppTheme.blue
+                    : AppTheme.muted,
+              ),
+            ),
           ],
         ),
       ),
