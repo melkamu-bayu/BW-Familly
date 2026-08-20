@@ -24,12 +24,14 @@ class NavShell extends ConsumerWidget {
     final canRecord = ref.watch(authProvider).canRecordTransactions;
 
     return PopScope(
-  canPop: path != '/dashboard',
-  onPopInvokedWithResult: (didPop, result) {
+  canPop: false,
+  onPopInvokedWithResult: (didPop, result) async {
     if (didPop) return;
 
-    if (path != '/dashboard') {
-      context.go('/dashboard');
+    if (context.canPop()) {
+      context.pop();
+    } else {
+      await SystemNavigator.pop();
     }
   },
   child: Scaffold(
