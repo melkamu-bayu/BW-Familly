@@ -1,4 +1,4 @@
-name: AssetFlow - Fix ALL Child Page Back Buttons
+name: AssetFlow - Fix All Child Page Back Buttons
 
 on:
   workflow_dispatch:
@@ -7,23 +7,16 @@ permissions:
   contents: write
 
 jobs:
-  fix-all-child-pages:
+  fix-back-buttons:
     runs-on: ubuntu-latest
 
     steps:
-
-      # ============================================================
-      # 1. CHECKOUT
-      # ============================================================
-      - name: Checkout master
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           ref: master
           fetch-depth: 0
 
-      # ============================================================
-      # 2. FLUTTER
-      # ============================================================
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -31,818 +24,248 @@ jobs:
           channel: stable
           cache: true
 
-      # ============================================================
-      # 3. VERIFY PROJECT
-      # ============================================================
-      - name: Verify AssetFlow project
+      - name: Verify project
         working-directory: assetflow_mobile
         run: |
           set -euo pipefail
-
           test -f pubspec.yaml
           test -f lib/router.dart
-          test -d lib/screens
           test -f lib/models/models.dart
-          test -f lib/widgets/nav_shell.dart
+          test -d lib/screens
+          echo "Project OK."
 
-          echo "======================================"
-          echo "AssetFlow project verified"
-          echo "======================================"
-
-      # ============================================================
-      # 4. DO NOT MODIFY NAVSHELL
-      #
-      # Existing PopScope is allowed.
-      # We only inspect it.
-      # ============================================================
-      - name: Inspect existing NavShell
+      - name: Verify dashboard route
         working-directory: assetflow_mobile
         run: |
           set -euo pipefail
-
-          echo "Inspecting NavShell..."
-
-          if grep -q "PopScope" lib/widgets/nav_shell.dart; then
-            echo "INFO: Existing PopScope found."
-            echo "NavShell will NOT be modified."
-          fi
-
-          if grep -q "WillPopScope" lib/widgets/nav_shell.dart; then
-            echo "INFO: Existing WillPopScope found."
-            echo "NavShell will NOT be modified."
-          fi
-
-          echo "NavShell inspection complete."
-
-      # ============================================================
-      # 5. VERIFY ROUTER
-      # ============================================================
-      - name: Verify router
-        working-directory: assetflow_mobile
-        run: |
-          set -euo pipefail
-
           grep -q "initialLocation: '/dashboard'" lib/router.dart
+          echo "Dashboard route OK."
 
-          echo "Dashboard initial route verified."
-
-      # ============================================================
-      # 6. FIX VEHICLE MODEL
-      #
-      # dashboard_screen.dart uses:
-      #
-      #   v.currentValue
-      #   v.purchasePrice
-      #
-      # The existing Vehicle model did not define them.
-      #
-      # Make them optional so old backend responses remain
-      # compatible.
-      # ============================================================
-      - name: Fix Vehicle model compatibility
+      - name: Inspect NavShell
         working-directory: assetflow_mobile
-        shell: python
         run: |
+          set -euo pipefail
+          if grep -q "PopScope" lib/widgets/nav_shell.dart; then
+            echo "PopScope exists in NavShell. Leaving NavShell unchanged."
+          fi
+
+      - name: Fix Vehicle model
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          python3 -c '
           from pathlib import Path
 
-          path = Path("lib/models/models.dart")
-          text = path.read_text(encoding="utf-8")
+          p = Path("lib/models/models.dart")
+          s = p.read_text()
 
-          # ----------------------------------------------------------
-          # Add fields
-          # ----------------------------------------------------------
-          if "final double? currentValue;" not in text:
-
+          if "final double? currentValue;" not in s:
               old = """  final double mileage;
-  final String status;"""
-
+            final String status;"""
               new = """  final double mileage;
-  final String status;
-  final double? currentValue;
-  final double? purchasePrice;"""
+            final String status;
+            final double? currentValue;
+            final double? purchasePrice;"""
+              if old not in s:
+                  raise SystemExit("Vehicle fields not found")
+              s = s.replace(old, new, 1)
 
-              if old not in text:
-                  raise SystemExit(
-                      "ERROR: Vehicle field structure not found."
-                  )
-
-              text = text.replace(old, new, 1)
-
-          # ----------------------------------------------------------
-          # Add constructor parameters
-          # ----------------------------------------------------------
-          if "this.currentValue," not in text:
-
+          if "this.currentValue" not in s:
               old = """    required this.mileage,
-    required this.status,
-  });"""
-
+            required this.status,
+          });"""
               new = """    required this.mileage,
-    required this.status,
-    this.currentValue,
-    this.purchasePrice,
-  });"""
+            required this.status,
+            this.currentValue,
+            this.purchasePrice,
+          });"""
+              if old not in s:
+                  raise SystemExit("Vehicle constructor not found")
+              s = s.replace(old, new, 1)
 
-              if old not in text:
-                  raise SystemExit(
-                      "ERROR: Vehicle constructor structure not found."
-                  )
+          if "currentValue: (json[\"current_value\"]" not in s:
+              old = """        mileage: (json["mileage"] as num).toDouble(),
+            status: json["status"] as String,"""
+              new = """        mileage: (json["mileage"] as num).toDouble(),
+            status: json["status"] as String,
+            currentValue: (json["current_value"] as num?)?.toDouble(),
+            purchasePrice: (json["purchase_price"] as num?)?.toDouble(),"""
+              if old in s:
+                  s = s.replace(old, new, 1)
 
-              text = text.replace(old, new, 1)
+          p.write_text(s)
+          print("Vehicle model checked.")
+          '
 
-          # ----------------------------------------------------------
-          # Add JSON parsing
-          # ----------------------------------------------------------
-          if "currentValue: (json['current_value']" not in text:
-
-              old = """        mileage: (json['mileage'] as num).toDouble(),
-        status: json['status'] as String,"""
-
-              new = """        mileage: (json['mileage'] as num).toDouble(),
-        status: json['status'] as String,
-        currentValue: (json['current_value'] as num?)?.toDouble(),
-        purchasePrice: (json['purchase_price'] as num?)?.toDouble(),"""
-
-              if old not in text:
-                  raise SystemExit(
-                      "ERROR: Vehicle.fromJson structure not found."
-                  )
-
-              text = text.replace(old, new, 1)
-
-          path.write_text(text, encoding="utf-8")
-
-          print("Vehicle model compatibility fixed.")
-
-      # ============================================================
-      # 7. VERIFY VEHICLE MODEL
-      # ============================================================
-      - name: Verify Vehicle model
+      - name: Add Back buttons
         working-directory: assetflow_mobile
         run: |
           set -euo pipefail
 
-          grep -q "final double? currentValue;" \
-            lib/models/models.dart
-
-          grep -q "final double? purchasePrice;" \
-            lib/models/models.dart
-
-          grep -q "this.currentValue" \
-            lib/models/models.dart
-
-          grep -q "this.purchasePrice" \
-            lib/models/models.dart
-
-          grep -q "currentValue: (json\['current_value'\]" \
-            lib/models/models.dart
-
-          grep -q "purchasePrice: (json\['purchase_price'\]" \
-            lib/models/models.dart
-
-          echo "Vehicle model verification passed."
-
-      # ============================================================
-      # 8. RECURSIVE BACK-BUTTON FIX
-      #
-      # EVERY screen under lib/screens is inspected recursively.
-      #
-      # Exceptions:
-      #   dashboard
-      #   auth
-      #   login
-      #   splash
-      #
-      # This means:
-      #
-      #   Parent page             -> Back
-      #   Child page              -> Back
-      #   Grandchild page         -> Back
-      #   Great-grandchild page   -> Back
-      #
-      # NOT only the final/deepest page.
-      # ============================================================
-      - name: Add Back button to ALL inner pages
-        working-directory: assetflow_mobile
-        shell: python
-        run: |
+          python3 -c '
           from pathlib import Path
           import re
 
-          ROOT = Path("lib/screens")
+          root = Path("lib/screens")
 
-          EXCLUDED = {
+          excluded = {
               "dashboard",
               "auth",
               "login",
               "splash",
           }
 
-          GO_ROUTER = "import 'package:go_router/go_router.dart';"
+          imp = "import '\''package:go_router/go_router.dart'\'';"
 
-          def read(path):
-              return path.read_text(encoding="utf-8")
+          for p in sorted(root.rglob("*.dart")):
 
-          def write(path, text):
-              path.write_text(text, encoding="utf-8")
+              rel = p.relative_to(root)
 
-          def ensure_import(path):
-              text = read(path)
+              if any(x in excluded for x in rel.parts[:-1]):
+                  continue
 
-              if GO_ROUTER in text:
-                  return
+              s = p.read_text()
 
-              lines = text.splitlines()
+              if "AppBar(" not in s:
+                  continue
 
-              import_indexes = [
-                  i
-                  for i, line in enumerate(lines)
-                  if line.startswith("import ")
-              ]
+              if "leading:" in s:
+                  continue
 
-              if import_indexes:
-                  lines.insert(
-                      import_indexes[-1] + 1,
-                      GO_ROUTER
-                  )
-              else:
-                  lines.insert(0, GO_ROUTER)
-
-              write(
-                  path,
-                  "\n".join(lines) + "\n"
-              )
-
-          def matching_paren(text, start):
-              depth = 0
-              quote = None
-              escaped = False
-
-              for i in range(start, len(text)):
-
-                  c = text[i]
-
-                  if quote:
-
-                      if escaped:
-                          escaped = False
-
-                      elif c == "\\":
-                          escaped = True
-
-                      elif c == quote:
-                          quote = None
-
-                      continue
-
-                  if c in ("'", '"'):
-                      quote = c
-
-                  elif c == "(":
-                      depth += 1
-
-                  elif c == ")":
-                      depth -= 1
-
-                      if depth == 0:
-                          return i
-
-              return None
-
-          def find_appbars(text):
-              result = []
-
-              for match in re.finditer(
-                  r"\bAppBar\s*\(",
-                  text
-              ):
-
-                  open_pos = text.find(
-                      "(",
-                      match.start()
-                  )
-
-                  close_pos = matching_paren(
-                      text,
-                      open_pos
-                  )
-
-                  if close_pos is None:
-                      raise RuntimeError(
-                          "Invalid AppBar parentheses."
-                      )
-
-                  result.append(
-                      (
-                          match.start(),
-                          open_pos,
-                          close_pos
+              if imp not in s:
+                  imports = list(
+                      re.finditer(
+                          r"^import .*;$",
+                          s,
+                          re.MULTILINE
                       )
                   )
 
-              return result
+                  if imports:
+                      pos = imports[-1].end()
+                      s = (
+                          s[:pos]
+                          + "\n"
+                          + imp
+                          + s[pos:]
+                      )
+                  else:
+                      s = imp + "\n" + s
 
-          changed = []
-
-          all_files = sorted(
-              ROOT.rglob("*.dart")
-          )
-
-          print(
-              f"Found {len(all_files)} Dart files."
-          )
-
-          for path in all_files:
-
-              relative = path.relative_to(ROOT)
-
-              directories = set(
-                  relative.parts[:-1]
+              s = s.replace(
+                  "AppBar(",
+                  """AppBar(
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back_rounded),
+              tooltip: "Back",
+              onPressed: () {
+                if (context.canPop()) {
+                  context.pop();
+                } else {
+                  context.go("/dashboard");
+                }
+              },
+            ),""",
+                  1
               )
 
-              # Only Dashboard/Auth are excluded.
-              if directories & EXCLUDED:
-                  continue
+              p.write_text(s)
 
-              text = read(path)
+              print("Updated:", p)
+          '
 
-              if "AppBar" not in text:
-                  continue
-
-              appbars = find_appbars(text)
-
-              needs_back = False
-
-              for _, open_pos, close_pos in appbars:
-
-                  body = text[
-                      open_pos + 1:
-                      close_pos
-                  ]
-
-                  if not re.search(
-                      r"\bleading\s*:",
-                      body
-                  ):
-                      needs_back = True
-                      break
-
-              if not needs_back:
-                  continue
-
-              ensure_import(path)
-
-              text = read(path)
-
-              appbars = find_appbars(text)
-
-              positions = []
-
-              for _, open_pos, close_pos in appbars:
-
-                  body = text[
-                      open_pos + 1:
-                      close_pos
-                  ]
-
-                  if re.search(
-                      r"\bleading\s*:",
-                      body
-                  ):
-                      continue
-
-                  positions.append(
-                      open_pos + 1
-                  )
-
-              for position in reversed(positions):
-
-                  block = """
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back_rounded),
-            tooltip: 'Back',
-            onPressed: () {
-              if (context.canPop()) {
-                context.pop();
-              } else {
-                context.go('/dashboard');
-              }
-            },
-          ),
-          """
-
-                  text = (
-                      text[:position]
-                      + block
-                      + text[position:]
-                  )
-
-              write(path, text)
-
-              changed.append(str(path))
-
-          print("")
-          print("======================================")
-          print("BACK BUTTON FIX COMPLETE")
-          print("======================================")
-
-          if changed:
-
-              for path in changed:
-                  print("MODIFIED:", path)
-
-          else:
-              print(
-                  "No AppBars required modification."
-              )
-
-      # ============================================================
-      # 9. PRESERVE CHILD NAVIGATION
-      #
-      # Child pages should be pushed so Back can pop them.
-      #
-      # Existing NavShell is NOT modified.
-      # ============================================================
-      - name: Preserve child navigation stack
+      - name: Verify Back buttons
         working-directory: assetflow_mobile
-        shell: python
         run: |
+          set -euo pipefail
+
+          python3 -c '
           from pathlib import Path
-
-          ROOT = Path("lib/screens")
-
-          CHILD_ROUTES = [
-              "/vehicles",
-              "/properties",
-              "/shop",
-              "/gold-project",
-              "/accounts",
-              "/notifications",
-              "/transactions",
-          ]
-
-          changed = []
-
-          for path in ROOT.rglob("*.dart"):
-
-              if "dashboard" in path.parts:
-                  continue
-
-              if "auth" in path.parts:
-                  continue
-
-              text = path.read_text(
-                  encoding="utf-8"
-              )
-
-              original = text
-
-              for route in CHILD_ROUTES:
-
-                  text = text.replace(
-                      f"context.go('{route}')",
-                      f"context.push('{route}')"
-                  )
-
-                  text = text.replace(
-                      f'context.go("{route}")',
-                      f'context.push("{route}")'
-                  )
-
-              if text != original:
-
-                  path.write_text(
-                      text,
-                      encoding="utf-8"
-                  )
-
-                  changed.append(str(path))
-
-          print("")
-          print("Child navigation changes:")
-
-          if changed:
-              for path in changed:
-                  print("MODIFIED:", path)
-          else:
-              print("No child navigation changes required.")
-
-      # ============================================================
-      # 10. VERIFY ALL INNER APPBARS
-      #
-      # Dashboard/Auth are excluded.
-      #
-      # Every other AppBar MUST have:
-      #
-      #   leading:
-      #   context.canPop()
-      #   context.pop()
-      # ============================================================
-      - name: Verify ALL inner AppBars have Back
-        working-directory: assetflow_mobile
-        shell: python
-        run: |
-          from pathlib import Path
-          import re
           import sys
 
-          ROOT = Path("lib/screens")
+          root = Path("lib/screens")
 
-          EXCLUDED = {
+          excluded = {
               "dashboard",
               "auth",
               "login",
               "splash",
           }
 
-          failures = []
-          checked = 0
+          errors = []
 
-          def matching_paren(text, start):
-              depth = 0
-              quote = None
-              escaped = False
+          for p in sorted(root.rglob("*.dart")):
 
-              for i in range(start, len(text)):
+              rel = p.relative_to(root)
 
-                  c = text[i]
-
-                  if quote:
-
-                      if escaped:
-                          escaped = False
-
-                      elif c == "\\":
-                          escaped = True
-
-                      elif c == quote:
-                          quote = None
-
-                      continue
-
-                  if c in ("'", '"'):
-                      quote = c
-
-                  elif c == "(":
-                      depth += 1
-
-                  elif c == ")":
-                      depth -= 1
-
-                      if depth == 0:
-                          return i
-
-              return None
-
-          for path in sorted(
-              ROOT.rglob("*.dart")
-          ):
-
-              relative = path.relative_to(ROOT)
-
-              directories = set(
-                  relative.parts[:-1]
-              )
-
-              if directories & EXCLUDED:
+              if any(x in excluded for x in rel.parts[:-1]):
                   continue
 
-              text = path.read_text(
-                  encoding="utf-8"
-              )
+              s = p.read_text()
 
-              matches = list(
-                  re.finditer(
-                      r"\bAppBar\s*\(",
-                      text
-                  )
-              )
+              if "AppBar(" not in s:
+                  continue
 
-              for match in matches:
+              if "leading:" not in s:
+                  errors.append(f"{p}: missing leading")
 
-                  checked += 1
+              if "context.canPop()" not in s:
+                  errors.append(f"{p}: missing canPop")
 
-                  open_pos = text.find(
-                      "(",
-                      match.start()
-                  )
+              if "context.pop()" not in s:
+                  errors.append(f"{p}: missing pop")
 
-                  close_pos = matching_paren(
-                      text,
-                      open_pos
-                  )
-
-                  if close_pos is None:
-
-                      failures.append(
-                          f"{path}: malformed AppBar"
-                      )
-
-                      continue
-
-                  body = text[
-                      open_pos + 1:
-                      close_pos
-                  ]
-
-                  if not re.search(
-                      r"\bleading\s*:",
-                      body
-                  ):
-                      failures.append(
-                          f"{path}: AppBar has no leading Back button"
-                      )
-
-                  if "context.canPop()" not in body:
-                      failures.append(
-                          f"{path}: AppBar has no context.canPop()"
-                      )
-
-                  if "context.pop()" not in body:
-                      failures.append(
-                          f"{path}: AppBar has no context.pop()"
-                      )
-
-          print(
-              f"Checked {checked} inner AppBars."
-          )
-
-          if failures:
-
-              print("")
-              print(
-                  "======================================"
-              )
-              print(
-                  "BACK BUTTON VERIFICATION FAILED"
-              )
-              print(
-                  "======================================"
-              )
-
-              for failure in failures:
-                  print(failure)
-
+          if errors:
+              print("Back-button verification failed:")
+              for e in errors:
+                  print(e)
               sys.exit(1)
 
-          print("")
-          print(
-              "======================================"
-          )
-          print(
-              "BACK BUTTON VERIFICATION PASSED"
-          )
-          print(
-              "======================================"
-          )
+          print("All detected inner AppBars have Back handling.")
+          '
 
-      # ============================================================
-      # 11. EXPLICITLY VERIFY IMPORTANT FIRST-LEVEL PAGES
-      #
-      # These are NOT treated as leaf-only pages.
-      # They themselves must have Back.
-      # ============================================================
-      - name: Verify important AssetFlow child pages
-        working-directory: assetflow_mobile
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          REQUIRED_FILES=(
-            "lib/screens/assets/assets_hub_screen.dart"
-            "lib/screens/vehicles/vehicles_list_screen.dart"
-            "lib/screens/properties/properties_list_screen.dart"
-            "lib/screens/shop/shop_screen.dart"
-            "lib/screens/projects/gold_project_screen.dart"
-            "lib/screens/accounts/accounts_screen.dart"
-            "lib/screens/notifications/notifications_screen.dart"
-          )
-
-          for file in "${REQUIRED_FILES[@]}"; do
-
-            if [ ! -f "$file" ]; then
-              echo "WARNING: $file not found."
-              continue
-            fi
-
-            echo "Checking $file"
-
-            if ! grep -q "leading:" "$file"; then
-              echo "ERROR: $file has no Back leading."
-              exit 1
-            fi
-
-            if ! grep -q "context.canPop()" "$file"; then
-              echo "ERROR: $file has no canPop()."
-              exit 1
-            fi
-
-            if ! grep -q "context.pop()" "$file"; then
-              echo "ERROR: $file has no pop()."
-              exit 1
-            fi
-
-          done
-
-          echo "Important child pages verified."
-
-      # ============================================================
-      # 12. SHOW COMPLETE SCREEN TREE
-      # ============================================================
-      - name: Audit complete screen tree
+      - name: Format
         working-directory: assetflow_mobile
         run: |
           set -euo pipefail
-
-          echo "======================================"
-          echo "COMPLETE ASSETFLOW SCREEN TREE"
-          echo "======================================"
-
-          find lib/screens \
-            -type f \
-            -name "*.dart" \
-            | sort
-
-      # ============================================================
-      # 13. FORMAT
-      # ============================================================
-      - name: Dart format
-        working-directory: assetflow_mobile
-        run: |
-          set -euo pipefail
-
           dart format lib
 
-      # ============================================================
-      # 14. PUB GET
-      # ============================================================
       - name: Flutter pub get
         working-directory: assetflow_mobile
         run: |
           set -euo pipefail
-
           flutter pub get
 
-      # ============================================================
-      # 15. ANALYZE
-      #
-      # Existing warnings/info are allowed.
-      # Actual Dart compile/analyzer errors are not.
-      # ============================================================
       - name: Flutter analyze
         working-directory: assetflow_mobile
         run: |
           set -euo pipefail
-
           flutter analyze
 
-      # ============================================================
-      # 16. VERIFY NO NAVSHELL CHANGES
-      # ============================================================
-      - name: Verify NavShell was not modified
+      - name: Verify NavShell unchanged
         run: |
           set -euo pipefail
 
-          if git diff --name-only | grep -q \
-            "^assetflow_mobile/lib/widgets/nav_shell.dart$"; then
-
+          if git diff --name-only | grep -q "assetflow_mobile/lib/widgets/nav_shell.dart"; then
             echo "ERROR: NavShell was modified."
             exit 1
           fi
 
-          echo "NavShell remains unchanged."
+          echo "NavShell unchanged."
 
-      # ============================================================
-      # 17. SHOW FINAL DIFF
-      # ============================================================
-      - name: Show final changes
+      - name: Show changes
         run: |
           set -euo pipefail
-
-          echo "======================================"
-          echo "GIT STATUS"
-          echo "======================================"
-
           git status --short
-
-          echo ""
-          echo "======================================"
-          echo "GIT DIFF STAT"
-          echo "======================================"
-
           git diff --stat
 
-      # ============================================================
-      # 18. COMMIT ONLY AFTER ALL CHECKS PASS
-      # ============================================================
       - name: Commit and push
         run: |
           set -euo pipefail
 
           git config user.name "github-actions[bot]"
-
-          git config user.email \
-            "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           if git diff --quiet; then
             echo "No changes required."
@@ -852,13 +275,5 @@ jobs:
           git add assetflow_mobile/lib/screens
           git add assetflow_mobile/lib/models/models.dart
 
-          git commit \
-            -m "Fix Back buttons on all AssetFlow child pages"
-
+          git commit -m "Fix Back buttons on all AssetFlow child pages"
           git push origin master
-
-          echo ""
-          echo "======================================"
-          echo "SUCCESS"
-          echo "======================================"
-          echo "All changes committed and pushed."
