@@ -1,0 +1,183 @@
+name: AssetFlow - Fix All Child Page Back Buttons
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-back-buttons:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.35.7"
+          channel: stable
+          cache: true
+
+      - name: Flutter pub get
+        working-directory: assetflow_mobile
+        run: flutter pub get
+
+      - name: Add back buttons to child screens
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          changed=0
+
+          while IFS= read -r -d '' file; do
+            case "$file" in
+              lib/router.dart|lib/widgets/nav_shell.dart)
+                continue
+                ;;
+            esac
+
+            if ! grep -q 'appBar: AppBar(' "$file"; then
+              continue
+            fi
+
+            if grep -q 'leading:' "$file"; then
+              continue
+            fi
+
+            perl -0pi -e 's/appBar: AppBar\(/appBar: AppBar(\n        leading: const BackButton(),/g' "$file"
+
+            changed=$((changed + 1))
+          done < <(find lib/screens -type f -name '*.dart' -print0)
+
+          echo "Modified child screen files: $changed"
+
+      - name: Format Dart
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+          dart format lib/screens
+
+      - name: Verify back buttons
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          count=$(grep -R -l \
+            'leading: const BackButton()' \
+            lib/screens \
+            --include='*.dart' \
+            | wc -l)
+
+          echo "Back-button screens found: $count"
+
+          if [ "$count" -eq 0 ]; then
+            echo "ERROR: No child-page BackButton found."
+            exit 1
+          fi
+
+      - name: Verify protected navigation files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if git diff --name-only | grep -E \
+            '^assetflow_mobile/lib/(router|widgets/nav_shell)\.dart$'
+          then
+            echo "ERROR: router.dart or nav_shell.dart was modified."
+            exit 1
+          fi
+
+          echo "Navigation architecture unchanged."
+
+      - name: Flutter analyze
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter analyze --no-fatal-warnings
+
+      - name: Ensure Android project
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ ! -d android ]; then
+            flutter create --platforms=android .
+          fi
+
+          test -f android/app/src/main/AndroidManifest.xml
+
+      - name: Ensure INTERNET permission
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          manifest="android/app/src/main/AndroidManifest.xml"
+
+          if ! grep -q 'android.permission.INTERNET' "$manifest"; then
+            perl -0pi -e 's#(<application)#<uses-permission android:name="android.permission.INTERNET"/>\n    $1#' "$manifest"
+          fi
+
+          grep -q 'android.permission.INTERNET' "$manifest"
+
+      - name: Final Flutter analyze
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter analyze --no-fatal-warnings
+
+      - name: Build release APK
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          flutter build apk \
+            --release \
+            --dart-define=API_BASE_URL=https://assetflow-api-f435.onrender.com/api/v1
+
+          test -f build/app/outputs/flutter-apk/app-release.apk
+
+          echo "APK build successful."
+
+      - name: Commit changes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add assetflow_mobile/lib/screens
+          git add assetflow_mobile/android
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Fix back buttons on child pages"
+            git push
+          fi
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: assetflow-release-apk
+          path: assetflow_mobile/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
