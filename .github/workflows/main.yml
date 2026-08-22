@@ -1,0 +1,522 @@
+name: AssetFlow - Fix All Child Page Back Buttons
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-back-buttons:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.35.7"
+          channel: stable
+          cache: true
+
+      # ------------------------------------------------------------
+      # 1. Verify the real AssetFlow project
+      # ------------------------------------------------------------
+      - name: Verify AssetFlow project
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Checking AssetFlow project..."
+
+          test -f pubspec.yaml
+          test -f analysis_options.yaml
+          test -f lib/router.dart
+          test -f lib/models/models.dart
+          test -f lib/widgets/nav_shell.dart
+          test -d lib/screens
+
+          grep -q "go_router:" pubspec.yaml
+          grep -q "ShellRoute(" lib/router.dart
+          grep -q "/vehicles/:id" lib/router.dart
+          grep -q "/properties/:id" lib/router.dart
+
+          echo "AssetFlow project verification PASSED."
+
+      # ------------------------------------------------------------
+      # 2. Verify every intended child page exists
+      # ------------------------------------------------------------
+      - name: Verify all child pages
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          pages=(
+            "lib/screens/assets/assets_hub_screen.dart"
+            "lib/screens/vehicles/vehicles_list_screen.dart"
+            "lib/screens/vehicles/vehicle_detail_screen.dart"
+            "lib/screens/properties/properties_list_screen.dart"
+            "lib/screens/properties/property_detail_screen.dart"
+            "lib/screens/shop/shop_screen.dart"
+            "lib/screens/projects/gold_project_screen.dart"
+            "lib/screens/accounts/accounts_screen.dart"
+            "lib/screens/reports/reports_screen.dart"
+            "lib/screens/notifications/notifications_screen.dart"
+            "lib/screens/settings/settings_screen.dart"
+          )
+
+          for page in "${pages[@]}"; do
+            if [[ ! -f "$page" ]]; then
+              echo "ERROR: Missing child page: $page"
+              exit 1
+            fi
+
+            if ! grep -q "Scaffold(" "$page"; then
+              echo "ERROR: Scaffold not found in: $page"
+              exit 1
+            fi
+
+            if ! grep -q "appBar:" "$page"; then
+              echo "ERROR: AppBar not found in: $page"
+              exit 1
+            fi
+
+            echo "Verified: $page"
+          done
+
+          echo "All 11 child pages verified."
+
+      # ------------------------------------------------------------
+      # 3. IMPORTANT:
+      #    Do NOT modify models.dart.
+      #    Do NOT modify NavShell.
+      # ------------------------------------------------------------
+      - name: Record protected files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          MODELS_SHA="$(git rev-parse HEAD:assetflow_mobile/lib/models/models.dart)"
+          NAVSHELL_SHA="$(git rev-parse HEAD:assetflow_mobile/lib/widgets/nav_shell.dart)"
+
+          echo "MODELS_SHA=$MODELS_SHA" >> "$GITHUB_ENV"
+          echo "NAVSHELL_SHA=$NAVSHELL_SHA" >> "$GITHUB_ENV"
+
+          echo "Protected files recorded."
+
+      # ------------------------------------------------------------
+      # 4. Add/fix Back buttons on ALL child pages
+      #
+      #    This does NOT touch models.dart.
+      #    This does NOT touch NavShell.
+      # ------------------------------------------------------------
+      - name: Fix Back buttons on all child pages
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          pages = [
+              Path("lib/screens/assets/assets_hub_screen.dart"),
+              Path("lib/screens/vehicles/vehicles_list_screen.dart"),
+              Path("lib/screens/vehicles/vehicle_detail_screen.dart"),
+              Path("lib/screens/properties/properties_list_screen.dart"),
+              Path("lib/screens/properties/property_detail_screen.dart"),
+              Path("lib/screens/shop/shop_screen.dart"),
+              Path("lib/screens/projects/gold_project_screen.dart"),
+              Path("lib/screens/accounts/accounts_screen.dart"),
+              Path("lib/screens/reports/reports_screen.dart"),
+              Path("lib/screens/notifications/notifications_screen.dart"),
+              Path("lib/screens/settings/settings_screen.dart"),
+          ]
+
+          GO_ROUTER_IMPORT = "import 'package:go_router/go_router.dart';"
+
+          for path in pages:
+              if not path.exists():
+                  raise SystemExit(f"ERROR: Missing file: {path}")
+
+              text = path.read_text(encoding="utf-8")
+
+              # ------------------------------------------------------
+              # Add GoRouter import only when it is really missing.
+              # ------------------------------------------------------
+              if GO_ROUTER_IMPORT not in text:
+                  imports = list(
+                      __import__("re").finditer(
+                          r"^import .+;$",
+                          text,
+                          __import__("re").MULTILINE,
+                      )
+                  )
+
+                  if imports:
+                      last = imports[-1]
+                      text = (
+                          text[:last.end()]
+                          + "\n"
+                          + GO_ROUTER_IMPORT
+                          + text[last.end():]
+                      )
+                  else:
+                      text = GO_ROUTER_IMPORT + "\n\n" + text
+
+              # ------------------------------------------------------
+              # Detect whether our Back button already exists.
+              # ------------------------------------------------------
+              if "tooltip: 'Back'" in text:
+                  print(f"Already fixed: {path}")
+                  path.write_text(text, encoding="utf-8")
+                  continue
+
+              # ------------------------------------------------------
+              # We only modify an actual Scaffold AppBar.
+              # ------------------------------------------------------
+              marker = "appBar: AppBar("
+
+              if marker not in text:
+                  raise SystemExit(
+                      f"ERROR: Expected AppBar not found in {path}"
+                  )
+
+              # ------------------------------------------------------
+              # IMPORTANT:
+              # context.canPop() is supported by go_router.
+              #
+              # If there is a nested route:
+              #     context.pop()
+              #
+              # If there is no route to pop:
+              #     context.go('/dashboard')
+              #
+              # This makes root child pages safe while allowing
+              # detail pages such as /vehicles/:id and
+              # /properties/:id to return to their list page.
+              # ------------------------------------------------------
+              replacement = """appBar: AppBar(
+                leading: IconButton(
+                  icon: const Icon(Icons.arrow_back_rounded),
+                  tooltip: 'Back',
+                  onPressed: () {
+                    if (context.canPop()) {
+                      context.pop();
+                    } else {
+                      context.go('/dashboard');
+                    }
+                  },
+                ),"""
+
+              text = text.replace(
+                  marker,
+                  replacement,
+                  1,
+              )
+
+              path.write_text(text, encoding="utf-8")
+
+              print(f"Back button fixed: {path}")
+
+          print("All 11 child pages processed successfully.")
+          PY
+
+      # ------------------------------------------------------------
+      # 5. Verify only the intended navigation changes occurred
+      # ------------------------------------------------------------
+      - name: Verify navigation changes
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          pages=(
+            "lib/screens/assets/assets_hub_screen.dart"
+            "lib/screens/vehicles/vehicles_list_screen.dart"
+            "lib/screens/vehicles/vehicle_detail_screen.dart"
+            "lib/screens/properties/properties_list_screen.dart"
+            "lib/screens/properties/property_detail_screen.dart"
+            "lib/screens/shop/shop_screen.dart"
+            "lib/screens/projects/gold_project_screen.dart"
+            "lib/screens/accounts/accounts_screen.dart"
+            "lib/screens/reports/reports_screen.dart"
+            "lib/screens/notifications/notifications_screen.dart"
+            "lib/screens/settings/settings_screen.dart"
+          )
+
+          for page in "${pages[@]}"; do
+            grep -q "tooltip: 'Back'" "$page"
+            grep -q "context.canPop()" "$page"
+            grep -q "context.pop()" "$page"
+            grep -q "context.go('/dashboard')" "$page"
+
+            echo "Back navigation verified: $page"
+          done
+
+          echo "All 11 child pages passed navigation verification."
+
+      # ------------------------------------------------------------
+      # 6. Verify protected files were NOT changed
+      # ------------------------------------------------------------
+      - name: Verify protected files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CURRENT_MODELS_SHA="$(git hash-object assetflow_mobile/lib/models/models.dart)"
+          CURRENT_NAVSHELL_SHA="$(git hash-object assetflow_mobile/lib/widgets/nav_shell.dart)"
+
+          if [[ "$CURRENT_MODELS_SHA" != "$MODELS_SHA" ]]; then
+            echo "ERROR: models.dart was modified."
+            exit 1
+          fi
+
+          if [[ "$CURRENT_NAVSHELL_SHA" != "$NAVSHELL_SHA" ]]; then
+            echo "ERROR: nav_shell.dart was modified."
+            exit 1
+          fi
+
+          if git diff --name-only | grep -E \
+            '^assetflow_mobile/lib/models/models\.dart$|^assetflow_mobile/lib/widgets/nav_shell\.dart$'
+          then
+            echo "ERROR: Protected file detected in git diff."
+            exit 1
+          fi
+
+          echo "Protected files are unchanged."
+
+      # ------------------------------------------------------------
+      # 7. Format ONLY the pages we changed
+      # ------------------------------------------------------------
+      - name: Format changed Dart pages
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          dart format \
+            lib/screens/assets/assets_hub_screen.dart \
+            lib/screens/vehicles/vehicles_list_screen.dart \
+            lib/screens/vehicles/vehicle_detail_screen.dart \
+            lib/screens/properties/properties_list_screen.dart \
+            lib/screens/properties/property_detail_screen.dart \
+            lib/screens/shop/shop_screen.dart \
+            lib/screens/projects/gold_project_screen.dart \
+            lib/screens/accounts/accounts_screen.dart \
+            lib/screens/reports/reports_screen.dart \
+            lib/screens/notifications/notifications_screen.dart \
+            lib/screens/settings/settings_screen.dart
+
+      # ------------------------------------------------------------
+      # 8. Get dependencies
+      # ------------------------------------------------------------
+      - name: Flutter pub get
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter pub get
+
+      # ------------------------------------------------------------
+      # 9. ANALYZER CHECK
+      #
+      #    Errors are NOT ignored.
+      #    Analyzer failure stops the workflow.
+      # ------------------------------------------------------------
+      - name: Flutter analyze
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Running Flutter analyzer..."
+
+          flutter analyze
+
+          echo "Flutter analyzer PASSED."
+
+      # ------------------------------------------------------------
+      # 10. Create Android platform files if repository doesn't
+      #     currently contain them.
+      #
+      #     Current repository does NOT contain assetflow_mobile/android.
+      # ------------------------------------------------------------
+      - name: Ensure Android project exists
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! -d android ]]; then
+            echo "Android project is missing."
+            echo "Creating Android platform files..."
+
+            flutter create \
+              --platforms=android \
+              --project-name=assetflow_mobile \
+              .
+
+          else
+            echo "Android project already exists."
+          fi
+
+          test -d android
+          test -f android/app/src/main/AndroidManifest.xml
+
+          echo "Android project verified."
+
+      # ------------------------------------------------------------
+      # 11. Ensure INTERNET permission
+      # ------------------------------------------------------------
+      - name: Ensure Android INTERNET permission
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+
+          if ! grep -q \
+            'android.permission.INTERNET' \
+            "$MANIFEST"
+          then
+
+            python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("android/app/src/main/AndroidManifest.xml")
+          text = path.read_text(encoding="utf-8")
+
+          permission = (
+              '    <uses-permission '
+              'android:name="android.permission.INTERNET"/>\n'
+          )
+
+          if "<manifest " not in text:
+              raise SystemExit(
+                  "ERROR: Android manifest root not found."
+              )
+
+          insert_at = text.find(">") + 1
+
+          text = (
+              text[:insert_at]
+              + "\n"
+              + permission
+              + text[insert_at:]
+          )
+
+          path.write_text(text, encoding="utf-8")
+          PY
+
+          fi
+
+          grep -q \
+            'android.permission.INTERNET' \
+            "$MANIFEST"
+
+          echo "INTERNET permission verified."
+
+      # ------------------------------------------------------------
+      # 12. Run analyzer AGAIN after Android generation.
+      #
+      #     This protects against platform-generation side effects.
+      # ------------------------------------------------------------
+      - name: Flutter analyze final
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          flutter analyze
+
+          echo "Final Flutter analyzer PASSED."
+
+      # ------------------------------------------------------------
+      # 13. Build production APK
+      # ------------------------------------------------------------
+      - name: Build release APK
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          flutter build apk \
+            --release \
+            --dart-define=API_BASE_URL=https://assetflow-api-f435.onrender.com/api/v1
+
+      # ------------------------------------------------------------
+      # 14. Final safety check
+      # ------------------------------------------------------------
+      - name: Final change safety check
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Changed files:"
+          git status --short
+
+          echo
+          echo "Diff summary:"
+          git diff --stat
+
+          if git diff --name-only | grep -E \
+            '^assetflow_mobile/lib/models/models\.dart$|^assetflow_mobile/lib/widgets/nav_shell\.dart$'
+          then
+            echo "ERROR: Protected navigation/model file changed."
+            exit 1
+          fi
+
+          echo "Final safety check PASSED."
+
+      # ------------------------------------------------------------
+      # 15. Commit everything necessary
+      # ------------------------------------------------------------
+      - name: Commit and push
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git add \
+            assetflow_mobile/lib/screens \
+            assetflow_mobile/android
+
+          git commit \
+            -m "Fix back buttons on all AssetFlow child pages"
+
+          git push origin master
+
+          echo "Changes successfully pushed to master."
+
+      # ------------------------------------------------------------
+      # 16. Upload APK
+      # ------------------------------------------------------------
+      - name: Upload release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: assetflow-release-apk
+          path: assetflow_mobile/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
