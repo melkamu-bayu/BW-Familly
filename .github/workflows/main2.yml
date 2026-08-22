@@ -1,0 +1,200 @@
+name: AssetFlow - Fix All Child Page Back Buttons
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-child-page-back-buttons:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.35.7"
+          channel: stable
+          cache: true
+
+      - name: Get Flutter dependencies
+        working-directory: assetflow_mobile
+        run: flutter pub get
+
+      - name: Fix Vehicle model
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="lib/models/models.dart"
+
+          if ! grep -q "final double? currentValue;" "$FILE"; then
+            perl -0pi -e 's/(final double mileage;\n)/$1  final double? currentValue;\n  final double? purchasePrice;\n/' "$FILE"
+          fi
+
+          if ! grep -q "this.currentValue" "$FILE"; then
+            perl -0pi -e 's/(required this\.mileage,\n)/$1    this.currentValue,\n    this.purchasePrice,\n/' "$FILE"
+          fi
+
+          if ! grep -q "currentValue: (json\['current_value'\]" "$FILE"; then
+            perl -0pi -e 's/(mileage: \(json\['\''mileage'\''\] as num\)\.toDouble\(\),\n)/$1        currentValue: (json['\''current_value'\''] as num?)?.toDouble(),\n        purchasePrice: (json['\''purchase_price'\''] as num?)?.toDouble(),\n/' "$FILE"
+          fi
+
+          grep -q "final double? currentValue;" "$FILE"
+          grep -q "final double? purchasePrice;" "$FILE"
+          grep -q "this.currentValue" "$FILE"
+          grep -q "this.purchasePrice" "$FILE"
+          grep -q "currentValue: (json['current_value'] as num?)?.toDouble()" "$FILE"
+          grep -q "purchasePrice: (json['purchase_price'] as num?)?.toDouble()" "$FILE"
+
+          echo "Vehicle model verified."
+
+      - name: Add back button to Vehicle child page
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="lib/screens/vehicles/vehicle_detail_screen.dart"
+
+          test -f "$FILE"
+
+          if ! grep -q "leading: const BackButton()," "$FILE"; then
+            perl -0pi -e 's/appBar: AppBar\(\n/appBar: AppBar(\n        leading: const BackButton(),\n/' "$FILE"
+          fi
+
+          grep -q "leading: const BackButton()," "$FILE"
+
+          echo "Vehicle detail back button verified."
+
+      - name: Add back button to Property child page
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="lib/screens/properties/property_detail_screen.dart"
+
+          test -f "$FILE"
+
+          if ! grep -q "leading: const BackButton()," "$FILE"; then
+            perl -0pi -e 's/appBar: AppBar\(\n/appBar: AppBar(\n        leading: const BackButton(),\n/' "$FILE"
+          fi
+
+          grep -q "leading: const BackButton()," "$FILE"
+
+          echo "Property detail back button verified."
+
+      - name: Format changed Dart files
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          dart format \
+            lib/models/models.dart \
+            lib/screens/vehicles/vehicle_detail_screen.dart \
+            lib/screens/properties/property_detail_screen.dart
+
+      - name: Verify navigation architecture unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if git diff --name-only | grep -E '^assetflow_mobile/lib/(router|widgets/nav_shell)\.dart$'; then
+            echo "ERROR: router.dart or nav_shell.dart was modified."
+            exit 1
+          fi
+
+          echo "Router and NavShell remain unchanged."
+
+      - name: Flutter analyzer
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          flutter analyze
+
+          echo "Flutter analyzer passed with no errors."
+
+      - name: Ensure Android project
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ ! -d android ]; then
+            flutter create --platforms=android .
+          fi
+
+          test -f android/app/src/main/AndroidManifest.xml
+
+      - name: Ensure Internet permission
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="android/app/src/main/AndroidManifest.xml"
+
+          if ! grep -q "android.permission.INTERNET" "$FILE"; then
+            perl -0pi -e 's#(<application)#<uses-permission android:name="android.permission.INTERNET"/>\n    $1#' "$FILE"
+          fi
+
+          grep -q "android.permission.INTERNET" "$FILE"
+
+      - name: Build release APK
+        working-directory: assetflow_mobile
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          flutter build apk \
+            --release \
+            --dart-define=API_BASE_URL=https://assetflow-api-f435.onrender.com/api/v1
+
+          test -f build/app/outputs/flutter-apk/app-release.apk
+
+          echo "Release APK built successfully."
+
+      - name: Commit changes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add \
+            assetflow_mobile/lib/models/models.dart \
+            assetflow_mobile/lib/screens/vehicles/vehicle_detail_screen.dart \
+            assetflow_mobile/lib/screens/properties/property_detail_screen.dart \
+            assetflow_mobile/android/app/src/main/AndroidManifest.xml
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Fix all child page back buttons"
+            git push
+          fi
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: assetflow-release-apk
+          path: assetflow_mobile/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
