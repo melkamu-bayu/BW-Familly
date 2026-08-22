@@ -1,0 +1,74 @@
+name: AssetFlow - Fix Child Page Back Buttons
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.35.7
+          channel: stable
+          cache: true
+
+      - name: Get dependencies
+        working-directory: assetflow_mobile
+        run: flutter pub get
+
+      - name: Fix Vehicle child page
+        working-directory: assetflow_mobile
+        run: |
+          set -e
+          FILE=$(find lib/screens/vehicles -type f -name '*.dart' | head -n 1)
+          test -n "$FILE"
+          grep -q 'appBar: AppBar(' "$FILE"
+          grep -q 'leading:' "$FILE" || perl -0pi -e 's/appBar: AppBar\(/appBar: AppBar(\n        leading: const BackButton(),/' "$FILE"
+          grep -q 'leading: const BackButton()' "$FILE"
+
+      - name: Fix Property child page
+        working-directory: assetflow_mobile
+        run: |
+          set -e
+          FILE=lib/screens/properties/property_detail_screen.dart
+          test -f "$FILE"
+          grep -q 'appBar: AppBar(' "$FILE"
+          grep -q 'leading:' "$FILE" || perl -0pi -e 's/appBar: AppBar\(/appBar: AppBar(\n        leading: const BackButton(),/' "$FILE"
+          grep -q 'leading: const BackButton()' "$FILE"
+
+      - name: Format
+        working-directory: assetflow_mobile
+        run: dart format lib/screens/vehicles lib/screens/properties
+
+      - name: Analyze
+        working-directory: assetflow_mobile
+        run: flutter analyze --no-fatal-warnings
+
+      - name: Build APK
+        working-directory: assetflow_mobile
+        run: flutter build apk --release --dart-define=API_BASE_URL=https://assetflow-api-f435.onrender.com/api/v1
+
+      - name: Commit
+        run: |
+          set -e
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add assetflow_mobile/lib/screens/vehicles assetflow_mobile/lib/screens/properties
+          git diff --cached --quiet || git commit -m 'Fix child page back buttons'
+          git push
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: assetflow-release-apk
+          path: assetflow_mobile/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
