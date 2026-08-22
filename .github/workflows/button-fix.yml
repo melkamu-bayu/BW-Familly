@@ -1,0 +1,584 @@
+name: AssetFlow - Fix Back Button For ALL Child Pages
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-all-child-pages:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ---------------------------------------------------------------
+      # 1. Checkout
+      # ---------------------------------------------------------------
+      - name: Checkout master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      # ---------------------------------------------------------------
+      # 2. Flutter
+      # ---------------------------------------------------------------
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.35.7"
+          channel: stable
+          cache: true
+
+      - name: Verify AssetFlow project
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          test -f pubspec.yaml
+          test -f lib/router.dart
+          test -d lib/screens
+
+          echo "AssetFlow project verified."
+
+      # ---------------------------------------------------------------
+      # 3. Protect Dashboard and NavShell
+      # ---------------------------------------------------------------
+      - name: Protect Dashboard and NavShell
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          grep -q "initialLocation: '/dashboard'" lib/router.dart
+
+          if grep -q "PopScope" lib/widgets/nav_shell.dart; then
+            echo "ERROR: PopScope found in NavShell."
+            exit 1
+          fi
+
+          if grep -q "WillPopScope" lib/widgets/nav_shell.dart; then
+            echo "ERROR: WillPopScope found in NavShell."
+            exit 1
+          fi
+
+          echo "Dashboard/NavShell protection passed."
+
+      # ---------------------------------------------------------------
+      # 4. Automatically add Back handling to EVERY screen
+      #    except Dashboard/Auth.
+      #
+      #    This is recursive:
+      #
+      #    lib/screens/
+      #      assets/
+      #      assets/vehicles/
+      #      assets/vehicles/detail/
+      #      settings/
+      #      settings/profile/edit/
+      #      transactions/
+      #      ...
+      #
+      #    No hard-coded "last page" list.
+      # ---------------------------------------------------------------
+      - name: Add Back button to ALL child pages
+        working-directory: assetflow_mobile
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          ROOT = Path("lib/screens")
+
+          GO_ROUTER = "import 'package:go_router/go_router.dart';"
+
+          EXCLUDED_DIRECTORIES = {
+              "dashboard",
+              "auth",
+              "login",
+              "splash",
+          }
+
+          def read(path):
+              return path.read_text(encoding="utf-8")
+
+          def write(path, text):
+              path.write_text(text, encoding="utf-8")
+
+          def ensure_go_router_import(path):
+              text = read(path)
+
+              if GO_ROUTER in text:
+                  return
+
+              lines = text.splitlines()
+
+              import_indexes = [
+                  i for i, line in enumerate(lines)
+                  if line.startswith("import ")
+              ]
+
+              if import_indexes:
+                  index = import_indexes[-1] + 1
+                  lines.insert(index, GO_ROUTER)
+              else:
+                  lines.insert(0, GO_ROUTER)
+
+              write(path, "\n".join(lines) + "\n")
+
+          def matching_paren(text, open_index):
+              depth = 0
+              quote = None
+              escaped = False
+
+              for i in range(open_index, len(text)):
+                  c = text[i]
+
+                  if quote is not None:
+                      if escaped:
+                          escaped = False
+                      elif c == "\\":
+                          escaped = True
+                      elif c == quote:
+                          quote = None
+                      continue
+
+                  if c in ("'", '"'):
+                      quote = c
+                      continue
+
+                  if c == "(":
+                      depth += 1
+
+                  elif c == ")":
+                      depth -= 1
+
+                      if depth == 0:
+                          return i
+
+              return None
+
+          def find_appbars(text):
+              result = []
+
+              for match in re.finditer(r"\bAppBar\s*\(", text):
+                  start = match.start()
+                  open_index = text.find("(", start)
+                  close_index = matching_paren(text, open_index)
+
+                  if close_index is None:
+                      raise RuntimeError(
+                          "Unbalanced AppBar() in source."
+                      )
+
+                  result.append(
+                      (start, open_index, close_index)
+                  )
+
+              return result
+
+          def has_argument(body, argument):
+              return re.search(
+                  rf"\b{re.escape(argument)}\s*:",
+                  body
+              ) is not None
+
+          def add_back_to_file(path):
+              text = read(path)
+              appbars = find_appbars(text)
+
+              if not appbars:
+                  return False
+
+              modifications = []
+
+              for _, open_index, close_index in appbars:
+                  body = text[open_index + 1:close_index]
+
+                  # If this AppBar already has a leading widget,
+                  # don't destroy the existing implementation.
+                  if has_argument(body, "leading"):
+                      continue
+
+                  modifications.append(open_index + 1)
+
+              if not modifications:
+                  return False
+
+              # Apply backwards.
+              for position in reversed(modifications):
+                  insertion = """
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_rounded),
+            tooltip: 'Back',
+            onPressed: () {
+              if (context.canPop()) {
+                context.pop();
+              } else {
+                context.go('/dashboard');
+              }
+            },
+          ),
+          """
+
+                  text = (
+                      text[:position]
+                      + insertion
+                      + text[position:]
+                  )
+
+              write(path, text)
+              return True
+
+          changed = []
+          scanned = 0
+          skipped = []
+
+          for path in sorted(ROOT.rglob("*.dart")):
+              relative = path.relative_to(ROOT)
+
+              # Check every directory component.
+              directory_names = set(relative.parts[:-1])
+
+              if directory_names & EXCLUDED_DIRECTORIES:
+                  skipped.append(str(path))
+                  continue
+
+              scanned += 1
+
+              text = read(path)
+
+              # A Dart screen without AppBar is reported for verification.
+              if "AppBar" not in text:
+                  continue
+
+              ensure_go_router_import(path)
+
+              if add_back_to_file(path):
+                  changed.append(str(path))
+
+          print("")
+          print("======================================")
+          print("RECURSIVE SCREEN SCAN")
+          print("======================================")
+          print(f"Scanned: {scanned}")
+          print(f"Changed: {len(changed)}")
+          print("")
+
+          for path in changed:
+              print(f"BACK ADDED: {path}")
+
+          print("")
+          print("Excluded:")
+          for path in skipped:
+              print(f"  {path}")
+
+      # ---------------------------------------------------------------
+      # 5. Fix navigation:
+      #
+      #    Child navigation = push
+      #    Back = pop
+      #
+      #    Do NOT modify bottom navigation itself.
+      # ---------------------------------------------------------------
+      - name: Preserve navigation stack for child pages
+        working-directory: assetflow_mobile
+        shell: python
+        run: |
+          from pathlib import Path
+
+          ROOT = Path("lib/screens")
+
+          # Routes that are children and therefore must be pushed.
+          CHILD_ROUTES = [
+              "/vehicles",
+              "/properties",
+              "/shop",
+              "/gold-project",
+              "/accounts",
+              "/notifications",
+          ]
+
+          changed = []
+
+          for path in ROOT.rglob("*.dart"):
+
+              if "dashboard" in path.parts:
+                  continue
+
+              if "auth" in path.parts:
+                  continue
+
+              text = path.read_text(encoding="utf-8")
+              original = text
+
+              for route in CHILD_ROUTES:
+
+                  text = text.replace(
+                      f"context.go('{route}')",
+                      f"context.push('{route}')"
+                  )
+
+                  text = text.replace(
+                      f'context.go("{route}")',
+                      f'context.push("{route}")'
+                  )
+
+              if text != original:
+                  path.write_text(text, encoding="utf-8")
+                  changed.append(str(path))
+
+          print("Child navigation updated:")
+
+          for path in changed:
+              print(f"  {path}")
+
+      # ---------------------------------------------------------------
+      # 6. Verify EVERY non-dashboard/non-auth AppBar.
+      #
+      # This is the important gate.
+      # ---------------------------------------------------------------
+      - name: Verify ALL child pages have Back buttons
+        working-directory: assetflow_mobile
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+          import sys
+
+          ROOT = Path("lib/screens")
+
+          EXCLUDED = {
+              "dashboard",
+              "auth",
+              "login",
+              "splash",
+          }
+
+          failures = []
+          checked = 0
+
+          def matching_paren(text, open_index):
+              depth = 0
+              quote = None
+              escaped = False
+
+              for i in range(open_index, len(text)):
+
+                  c = text[i]
+
+                  if quote:
+                      if escaped:
+                          escaped = False
+                      elif c == "\\":
+                          escaped = True
+                      elif c == quote:
+                          quote = None
+                      continue
+
+                  if c in ("'", '"'):
+                      quote = c
+                      continue
+
+                  if c == "(":
+                      depth += 1
+
+                  elif c == ")":
+                      depth -= 1
+
+                      if depth == 0:
+                          return i
+
+              return None
+
+          for path in sorted(ROOT.rglob("*.dart")):
+
+              relative = path.relative_to(ROOT)
+
+              if set(relative.parts[:-1]) & EXCLUDED:
+                  continue
+
+              text = path.read_text(encoding="utf-8")
+
+              for match in re.finditer(
+                  r"\bAppBar\s*\(",
+                  text
+              ):
+
+                  checked += 1
+
+                  open_index = text.find(
+                      "(",
+                      match.start()
+                  )
+
+                  close_index = matching_paren(
+                      text,
+                      open_index
+                  )
+
+                  if close_index is None:
+                      failures.append(
+                          f"{path}: malformed AppBar"
+                      )
+                      continue
+
+                  body = text[
+                      open_index + 1:
+                      close_index
+                  ]
+
+                  if not re.search(
+                      r"\bleading\s*:",
+                      body
+                  ):
+                      failures.append(
+                          f"{path}: AppBar has NO Back button"
+                      )
+
+                  if "context.canPop()" not in body:
+                      failures.append(
+                          f"{path}: missing context.canPop()"
+                      )
+
+                  if "context.pop()" not in body:
+                      failures.append(
+                          f"{path}: missing context.pop()"
+                      )
+
+          print(f"Checked {checked} AppBars.")
+
+          if failures:
+              print("")
+              print("======================================")
+              print("BACK BUTTON VERIFICATION FAILED")
+              print("======================================")
+
+              for failure in failures:
+                  print(failure)
+
+              sys.exit(1)
+
+          print("")
+          print("======================================")
+          print("BACK BUTTON VERIFICATION PASSED")
+          print("======================================")
+          print("Every child-page AppBar has Back handling.")
+
+      # ---------------------------------------------------------------
+      # 7. Verify Dashboard is the ONLY normal screen without Back.
+      # ---------------------------------------------------------------
+      - name: Verify Dashboard exception
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          if grep -q "tooltip: 'Back'" \
+            lib/screens/dashboard/dashboard_screen.dart; then
+
+            echo "ERROR: Dashboard must not have Back button."
+            exit 1
+          fi
+
+          grep -q "initialLocation: '/dashboard'" lib/router.dart
+
+          echo "Dashboard exception verified."
+
+      # ---------------------------------------------------------------
+      # 8. Verify NavShell
+      # ---------------------------------------------------------------
+      - name: Verify NavShell
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          if grep -q "PopScope" lib/widgets/nav_shell.dart; then
+            echo "ERROR: PopScope detected."
+            exit 1
+          fi
+
+          if grep -q "WillPopScope" lib/widgets/nav_shell.dart; then
+            echo "ERROR: WillPopScope detected."
+            exit 1
+          fi
+
+          echo "NavShell verified."
+
+      # ---------------------------------------------------------------
+      # 9. Show all screen files for audit.
+      # ---------------------------------------------------------------
+      - name: Audit complete screen tree
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          echo "======================================"
+          echo "ALL ASSETFLOW SCREEN FILES"
+          echo "======================================"
+
+          find lib/screens \
+            -type f \
+            -name "*.dart" \
+            | sort
+
+      # ---------------------------------------------------------------
+      # 10. Format
+      # ---------------------------------------------------------------
+      - name: Dart format
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          dart format lib
+
+      # ---------------------------------------------------------------
+      # 11. Dependencies
+      # ---------------------------------------------------------------
+      - name: Flutter pub get
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          flutter pub get
+
+      # ---------------------------------------------------------------
+      # 12. Analyze
+      # ---------------------------------------------------------------
+      - name: Flutter analyze
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          flutter analyze
+
+      # ---------------------------------------------------------------
+      # 13. Final diff
+      # ---------------------------------------------------------------
+      - name: Show final changes
+        run: |
+          set -euo pipefail
+
+          git status --short
+          git diff --stat
+
+      # ---------------------------------------------------------------
+      # 14. Commit ONLY if everything passed.
+      # ---------------------------------------------------------------
+      - name: Commit and push
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet; then
+            echo "No changes required."
+            exit 0
+          fi
+
+          git add assetflow_mobile/lib/screens
+
+          git commit \
+            -m "Fix Back button on all AssetFlow child pages"
+
+          git push origin master
