@@ -323,6 +323,315 @@ jobs:
           echo "========================================"
           echo "DIFF SUMMARY"
           echo "========================================"
+name: AssetFlow - Fix All Child Page Back Buttons
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-back-buttons:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.35.7"
+          channel: stable
+          cache: true
+
+      - name: Verify project
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          test -f pubspec.yaml
+          test -f lib/router.dart
+          test -f lib/models/models.dart
+          test -f lib/widgets/nav_shell.dart
+          test -d lib/screens
+
+          grep -q "initialLocation: '/dashboard'" lib/router.dart
+
+          echo "Project verification passed."
+
+      - name: Add Back buttons to all child pages
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          files = [
+              "lib/screens/assets/assets_hub_screen.dart",
+              "lib/screens/vehicles/vehicles_list_screen.dart",
+              "lib/screens/vehicles/vehicle_detail_screen.dart",
+              "lib/screens/properties/properties_list_screen.dart",
+              "lib/screens/properties/property_detail_screen.dart",
+              "lib/screens/shop/shop_screen.dart",
+              "lib/screens/projects/gold_project_screen.dart",
+              "lib/screens/accounts/accounts_screen.dart",
+              "lib/screens/reports/reports_screen.dart",
+              "lib/screens/notifications/notifications_screen.dart",
+              "lib/screens/settings/settings_screen.dart",
+          ]
+
+          import_line = "import 'package:go_router/go_router.dart';"
+
+          back_button = """appBar: AppBar(
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back_rounded),
+              tooltip: 'Back',
+              onPressed: () {
+                if (context.canPop()) {
+                  context.pop();
+                } else {
+                  context.go('/dashboard');
+                }
+              },
+            ),"""
+
+          for filename in files:
+              path = Path(filename)
+
+              if not path.exists():
+                  raise SystemExit(
+                      f"ERROR: Required screen does not exist: {filename}"
+                  )
+
+              text = path.read_text(encoding="utf-8")
+
+              if import_line not in text:
+                  lines = text.splitlines()
+                  last_import = -1
+
+                  for index, line in enumerate(lines):
+                      if line.startswith("import "):
+                          last_import = index
+
+                  if last_import >= 0:
+                      lines.insert(last_import + 1, import_line)
+                      text = "\n".join(lines) + "\n"
+                  else:
+                      text = import_line + "\n\n" + text
+
+              if "tooltip: 'Back'" in text:
+                  print(f"Already has Back button: {filename}")
+                  path.write_text(text, encoding="utf-8")
+                  continue
+
+              marker = "appBar: AppBar("
+
+              if marker not in text:
+                  raise SystemExit(
+                      f"ERROR: No AppBar found in {filename}"
+                  )
+
+              text = text.replace(
+                  marker,
+                  back_button,
+                  1,
+              )
+
+              path.write_text(text, encoding="utf-8")
+
+              print(f"Back button added: {filename}")
+
+          print("All child pages processed.")
+          PY
+
+      - name: Fix Vehicle model compatibility
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("lib/models/models.dart")
+          text = path.read_text(encoding="utf-8")
+
+          if "final double? currentValue;" not in text:
+              marker = """  final double mileage;
+            final String status;"""
+
+              replacement = """  final double mileage;
+            final String status;
+            final double? currentValue;
+            final double? purchasePrice;"""
+
+              if marker not in text:
+                  raise SystemExit(
+                      "ERROR: Vehicle fields were not found."
+                  )
+
+              text = text.replace(marker, replacement, 1)
+
+          if "this.currentValue" not in text:
+              marker = """    required this.mileage,
+            required this.status,
+          });"""
+
+              replacement = """    required this.mileage,
+            required this.status,
+            this.currentValue,
+            this.purchasePrice,
+          });"""
+
+              if marker not in text:
+                  raise SystemExit(
+                      "ERROR: Vehicle constructor was not found."
+                  )
+
+              text = text.replace(marker, replacement, 1)
+
+          if "currentValue: (json['current_value'] as num?)?.toDouble()," not in text:
+              marker = """        mileage: (json['mileage'] as num).toDouble(),
+            status: json['status'] as String,"""
+
+              replacement = """        mileage: (json['mileage'] as num).toDouble(),
+            status: json['status'] as String,
+            currentValue: (json['current_value'] as num?)?.toDouble(),
+            purchasePrice: (json['purchase_price'] as num?)?.toDouble(),"""
+
+              if marker not in text:
+                  raise SystemExit(
+                      "ERROR: Vehicle.fromJson was not found."
+                  )
+
+              text = text.replace(marker, replacement, 1)
+
+          path.write_text(text, encoding="utf-8")
+
+          print("Vehicle model compatibility fixed.")
+          PY
+
+      - name: Verify Back buttons
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          files = [
+              "lib/screens/assets/assets_hub_screen.dart",
+              "lib/screens/vehicles/vehicles_list_screen.dart",
+              "lib/screens/vehicles/vehicle_detail_screen.dart",
+              "lib/screens/properties/properties_list_screen.dart",
+              "lib/screens/properties/property_detail_screen.dart",
+              "lib/screens/shop/shop_screen.dart",
+              "lib/screens/projects/gold_project_screen.dart",
+              "lib/screens/accounts/accounts_screen.dart",
+              "lib/screens/reports/reports_screen.dart",
+              "lib/screens/notifications/notifications_screen.dart",
+              "lib/screens/settings/settings_screen.dart",
+          ]
+
+          errors = []
+
+          for filename in files:
+              path = Path(filename)
+              text = path.read_text(encoding="utf-8")
+
+              if "tooltip: 'Back'" not in text:
+                  errors.append(f"{filename}: Back button missing")
+
+              if "context.canPop()" not in text:
+                  errors.append(f"{filename}: context.canPop() missing")
+
+              if "context.pop()" not in text:
+                  errors.append(f"{filename}: context.pop() missing")
+
+              if "context.go('/dashboard')" not in text:
+                  errors.append(
+                      f"{filename}: dashboard fallback missing"
+                  )
+
+          if errors:
+              print("BACK BUTTON VERIFICATION FAILED")
+
+              for error in errors:
+                  print(error)
+
+              raise SystemExit(1)
+
+          print(
+              "Back-button verification passed for all 11 child pages."
+          )
+          PY
+
+      - name: Verify Vehicle model
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          grep -q "final double? currentValue;" lib/models/models.dart
+          grep -q "final double? purchasePrice;" lib/models/models.dart
+          grep -q "this.currentValue" lib/models/models.dart
+          grep -q "this.purchasePrice" lib/models/models.dart
+          grep -q "currentValue: (json\['current_value'\]" lib/models/models.dart
+          grep -q "purchasePrice: (json\['purchase_price'\]" lib/models/models.dart
+
+          echo "Vehicle model verification passed."
+
+      - name: Verify NavShell unchanged
+        run: |
+          set -euo pipefail
+
+          if git diff --name-only | grep -q \
+            "^assetflow_mobile/lib/widgets/nav_shell.dart$"; then
+            echo "ERROR: NavShell was modified."
+            exit 1
+          fi
+
+          echo "NavShell remains unchanged."
+
+      - name: Format Dart
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+          dart format lib
+
+      - name: Flutter pub get
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+          flutter pub get
+
+      - name: Flutter analyze
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          flutter analyze \
+            --no-fatal-infos \
+            --no-fatal-warnings
+
+      - name: Show final changes
+        run: |
+          set -euo pipefail
+
+          echo "========================================"
+          echo "CHANGED FILES"
+          echo "========================================"
+
+          git status --short
+
+          echo ""
+          echo "========================================"
+          echo "DIFF SUMMARY"
+          echo "========================================"
 
           git diff --stat
 
@@ -341,7 +650,8 @@ jobs:
           git add assetflow_mobile/lib/screens
           git add assetflow_mobile/lib/models/models.dart
 
-          git commit -m "Fix Back buttons on all AssetFlow child pages"
+          git commit \
+            -m "Fix Back buttons on all AssetFlow child pages"
 
           git push origin master
 
