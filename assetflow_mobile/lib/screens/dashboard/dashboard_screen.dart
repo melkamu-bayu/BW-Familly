@@ -94,7 +94,7 @@ class _HomeContent extends StatelessWidget {
         children: [
         const SizedBox(height: 20),
         Text(
-          'Good Morning, $userName 👋',
+          '${DateTime.now().hour < 12 ? 'Good Morning' : DateTime.now().hour < 18 ? 'Good Afternoon' : 'Good Evening'}, $userName 👋',
           style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: AppTheme.ink),
         ),
         const SizedBox(height: 4),
