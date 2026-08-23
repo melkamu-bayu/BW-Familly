@@ -1,1 +1,251 @@
+name: Fix All Child Page Back Buttons
 
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-back-buttons:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ============================================================
+      # 1. CREATE THE SHARED BACK BUTTON WIDGET
+      # ============================================================
+      - name: Create AppBackButton widget
+        run: |
+          mkdir -p assetflow_mobile/lib/widgets
+          cat > assetflow_mobile/lib/widgets/app_back_button.dart << 'DART_EOF'
+          import 'package:flutter/material.dart';
+          import 'package:go_router/go_router.dart';
+
+          /// A back button that always works, regardless of how the screen
+          /// was reached.
+          ///
+          /// Screens reached via context.push() (drilling in from another
+          /// screen) have something to pop -- Navigator.canPop() is true,
+          /// and this behaves like a normal back arrow.
+          ///
+          /// Screens reached via context.go() (the bottom-nav tabs --
+          /// Reports, Profile/Settings) have nothing to pop, since go()
+          /// replaces the current location rather than stacking on top of
+          /// it. For those, this falls back to going straight to the
+          /// dashboard instead of leaving the person with no way back at
+          /// all -- every child page gets a working, visible back button,
+          /// no exceptions, regardless of entry path.
+          class AppBackButton extends StatelessWidget {
+            const AppBackButton({super.key});
+
+            @override
+            Widget build(BuildContext context) {
+              return IconButton(
+                icon: const Icon(Icons.arrow_back),
+                tooltip: 'Back',
+                onPressed: () {
+                  if (Navigator.of(context).canPop()) {
+                    context.pop();
+                  } else {
+                    context.go('/dashboard');
+                  }
+                },
+              );
+            }
+          }
+          DART_EOF
+          echo "Created lib/widgets/app_back_button.dart"
+
+      # ============================================================
+      # 2. INJECT THE BACK BUTTON INTO EVERY CHILD SCREEN
+      #
+      # Each replacement targets the EXACT current text of that screen's
+      # AppBar (verified against the real repo before this workflow was
+      # written -- not a generic pattern that might silently fail to
+      # match). If a screen's AppBar has changed since, the assertion
+      # below will fail the build loudly rather than silently doing
+      # nothing, unlike a bare sed/regex replace would.
+      # ============================================================
+      - name: Inject AppBackButton into every child screen
+        run: |
+          cd assetflow_mobile
+          python3 << 'PY_EOF'
+          from pathlib import Path
+          import sys
+
+          # (file, exact old text, exact new text)
+          replacements = [
+              (
+                  "lib/screens/projects/gold_project_screen.dart",
+                  "appBar: AppBar(title: const Text('Gold-Mining Project')),",
+                  "appBar: AppBar(leading: const AppBackButton(), title: const Text('Gold-Mining Project')),",
+              ),
+              (
+                  "lib/screens/assets/assets_hub_screen.dart",
+                  "appBar: AppBar(title: const Text('Assets', style: TextStyle(fontWeight: FontWeight.w800))),",
+                  "appBar: AppBar(leading: const AppBackButton(), title: const Text('Assets', style: TextStyle(fontWeight: FontWeight.w800))),",
+              ),
+              (
+                  "lib/screens/notifications/notifications_screen.dart",
+                  "appBar: AppBar(title: const Text('Notifications')),",
+                  "appBar: AppBar(leading: const AppBackButton(), title: const Text('Notifications')),",
+              ),
+              (
+                  "lib/screens/settings/settings_screen.dart",
+                  "appBar: AppBar(title: const Text('Settings')),",
+                  "appBar: AppBar(leading: const AppBackButton(), title: const Text('Settings')),",
+              ),
+              (
+                  "lib/screens/properties/property_detail_screen.dart",
+                  "appBar: AppBar(title: Text(property?.name ?? 'Property')),",
+                  "appBar: AppBar(leading: const AppBackButton(), title: Text(property?.name ?? 'Property')),",
+              ),
+              (
+                  "lib/screens/properties/properties_list_screen.dart",
+                  "appBar: AppBar(title: const Text('Rental Houses')),",
+                  "appBar: AppBar(leading: const AppBackButton(), title: const Text('Rental Houses')),",
+              ),
+              (
+                  "lib/screens/reports/reports_screen.dart",
+                  "appBar: AppBar(title: const Text('Reports & Analytics')),",
+                  "appBar: AppBar(leading: const AppBackButton(), title: const Text('Reports & Analytics')),",
+              ),
+              (
+                  "lib/screens/vehicles/vehicles_list_screen.dart",
+                  "appBar: AppBar(title: const Text('Vehicles')),",
+                  "appBar: AppBar(leading: const AppBackButton(), title: const Text('Vehicles')),",
+              ),
+              (
+                  "lib/screens/vehicles/vehicle_detail_screen.dart",
+                  "appBar: AppBar(title: Text(vehicle?.name ?? 'Vehicle')),",
+                  "appBar: AppBar(leading: const AppBackButton(), title: Text(vehicle?.name ?? 'Vehicle')),",
+              ),
+              (
+                  "lib/screens/shop/shop_screen.dart",
+                  "      appBar: AppBar(\n        title: const Text('Construction Materials Shop'),",
+                  "      appBar: AppBar(\n        leading: const AppBackButton(),\n        title: const Text('Construction Materials Shop'),",
+              ),
+              (
+                  "lib/screens/accounts/accounts_screen.dart",
+                  "      appBar: AppBar(\n        title: const Text('Accounts'),",
+                  "      appBar: AppBar(\n        leading: const AppBackButton(),\n        title: const Text('Accounts'),",
+              ),
+          ]
+
+          failures = []
+
+          for file_path, old, new in replacements:
+              path = Path(file_path)
+              if not path.exists():
+                  failures.append(f"MISSING FILE: {file_path}")
+                  continue
+
+              text = path.read_text()
+
+              if old not in text:
+                  failures.append(
+                      f"NO MATCH in {file_path} -- the AppBar text has "
+                      f"changed since this workflow was written, refusing "
+                      f"to guess. Update the 'old' string in this workflow "
+                      f"to match the current source."
+                  )
+                  continue
+
+              if text.count(old) > 1:
+                  failures.append(
+                      f"AMBIGUOUS MATCH in {file_path} -- expected text "
+                      f"appears more than once, refusing to guess which."
+                  )
+                  continue
+
+              new_text = text.replace(old, new, 1)
+              path.write_text(new_text)
+              print(f"OK: patched {file_path}")
+
+              # Ensure the import exists.
+              import_line = "import '../../widgets/app_back_button.dart';\n"
+              # property_detail_screen.dart and vehicle_detail_screen.dart etc.
+              # are all two levels under lib/screens/, so ../../widgets/ is
+              # correct for every file in this list.
+              if "app_back_button.dart" not in new_text:
+                  lines = new_text.splitlines(keepends=True)
+                  # insert after the last existing import line
+                  last_import_idx = 0
+                  for i, line in enumerate(lines):
+                      if line.startswith("import "):
+                          last_import_idx = i
+                  lines.insert(last_import_idx + 1, import_line)
+                  path.write_text("".join(lines))
+                  print(f"OK: added import to {file_path}")
+
+          if failures:
+              print("\n=== FAILURES ===")
+              for f in failures:
+                  print(f)
+              sys.exit(1)
+
+          print("\nAll 11 screens patched successfully.")
+          PY_EOF
+
+      # ============================================================
+      # 3. VERIFY -- fail loudly if anything is missing or if the
+      #    dashboard (the true home screen) accidentally got one too
+      # ============================================================
+      - name: Verify every child screen has AppBackButton, dashboard does not
+        run: |
+          cd assetflow_mobile
+          echo "### Screens with AppBackButton (expect exactly 11) ###"
+          COUNT=$(grep -rl "AppBackButton" lib/screens/ | grep -v dashboard | wc -l)
+          echo "Found: $COUNT"
+          if [ "$COUNT" -ne 11 ]; then
+            echo "ERROR: expected exactly 11 screens with AppBackButton, found $COUNT"
+            grep -rl "AppBackButton" lib/screens/
+            exit 1
+          fi
+
+          echo ""
+          echo "### Dashboard must NOT have a back button (it's the true home) ###"
+          if grep -q "AppBackButton" lib/screens/dashboard/dashboard_screen.dart 2>/dev/null; then
+            echo "ERROR: dashboard_screen.dart should never have a back button"
+            exit 1
+          fi
+          echo "OK: dashboard correctly excluded"
+
+          echo ""
+          echo "### Brace/paren balance check on every touched file ###"
+          for f in lib/widgets/app_back_button.dart \
+                   lib/screens/projects/gold_project_screen.dart \
+                   lib/screens/assets/assets_hub_screen.dart \
+                   lib/screens/notifications/notifications_screen.dart \
+                   lib/screens/settings/settings_screen.dart \
+                   lib/screens/properties/property_detail_screen.dart \
+                   lib/screens/properties/properties_list_screen.dart \
+                   lib/screens/reports/reports_screen.dart \
+                   lib/screens/vehicles/vehicles_list_screen.dart \
+                   lib/screens/vehicles/vehicle_detail_screen.dart \
+                   lib/screens/shop/shop_screen.dart \
+                   lib/screens/accounts/accounts_screen.dart; do
+            python3 -c "
+          s = open('$f').read()
+          o, c = s.count('{'), s.count('}')
+          po, pc = s.count('('), s.count(')')
+          if o != c or po != pc:
+              print('MISMATCH: $f braces', o, c, 'parens', po, pc)
+              exit(1)
+          "
+          done
+          echo "OK: all touched files balanced"
+
+      # ============================================================
+      # 4. COMMIT AND PUSH
+      # ============================================================
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add assetflow_mobile/lib/widgets/app_back_button.dart
+          git add assetflow_mobile/lib/screens/
+          git commit -m "Add universal back button to every child page (including Notifications and Profile/Settings)" || echo "No changes to commit"
+          git push
