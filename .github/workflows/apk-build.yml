@@ -1,0 +1,107 @@
+name: Build AssetFlow Release APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    name: Build AssetFlow APK
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: assetflow_mobile
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Verify Flutter project
+        run: |
+          test -f pubspec.yaml
+          test -d android
+          test -d lib
+          echo "Flutter project verified."
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Fix Vehicle dashboard compile error
+        run: |
+          sed -i 's/v\.currentValue ?? v\.purchasePrice ?? 0/0/g' \
+            lib/screens/dashboard/dashboard_screen.dart
+
+          echo "Vehicle valuation compile references fixed."
+
+          if grep -nE 'v\.currentValue|v\.purchasePrice' \
+            lib/screens/dashboard/dashboard_screen.dart; then
+            echo "ERROR: Invalid Vehicle valuation references still exist."
+            exit 1
+          fi
+
+      - name: Configure AssetFlow launcher icon
+        run: |
+          test -f assets/assetflow_logo.png
+
+          flutter pub add --dev flutter_launcher_icons
+
+          printf '%s\n' \
+            'flutter_launcher_icons:' \
+            '  android: true' \
+            '  ios: false' \
+            '  image_path: "assets/assetflow_logo.png"' \
+            '  adaptive_icon_background: "#FFFFFF"' \
+            '  adaptive_icon_foreground: "assets/assetflow_logo.png"' \
+            > flutter_launcher_icons.yaml
+
+          flutter pub get
+
+      - name: Generate AssetFlow APK icon
+        run: |
+          dart run flutter_launcher_icons
+
+      - name: Verify Android project
+        run: |
+          test -f android/gradlew
+          test -f android/app/build.gradle || test -f android/app/build.gradle.kts
+          echo "Android Gradle project verified."
+
+      - name: Build release APK
+        run: |
+          flutter clean
+          flutter pub get
+
+          flutter build apk \
+            --release \
+            --dart-define=API_BASE_URL=https://assetflow-api-f435.onrender.com/api/v1
+
+      - name: Verify APK
+        run: |
+          test -f build/app/outputs/flutter-apk/app-release.apk
+          ls -lh build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Upload AssetFlow APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AssetFlow-release-apk
+          path: assetflow_mobile/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
