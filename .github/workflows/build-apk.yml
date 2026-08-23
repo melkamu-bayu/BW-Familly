@@ -1,0 +1,78 @@
+name: AssetFlow - Build APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.35.7"
+          channel: stable
+          cache: true
+
+      - name: Verify Flutter project
+        working-directory: assetflow_mobile
+        run: |
+          test -f pubspec.yaml
+          test -d lib
+          echo "Flutter project verified."
+
+      - name: Get dependencies
+        working-directory: assetflow_mobile
+        run: flutter pub get
+
+      - name: Verify child page back buttons
+        working-directory: assetflow_mobile
+        run: |
+          set -e
+
+          grep -q "AppBackButton" lib/screens/vehicles/vehicle_detail_screen.dart
+          grep -q "AppBackButton" lib/screens/properties/property_detail_screen.dart
+
+          echo "Vehicle detail back button: OK"
+          echo "Property detail back button: OK"
+
+      - name: Flutter analyze
+        working-directory: assetflow_mobile
+        run: flutter analyze --no-fatal-warnings
+
+      - name: Build release APK
+        working-directory: assetflow_mobile
+        run: |
+          flutter build apk \
+            --release \
+            --dart-define=API_BASE_URL=https://assetflow-api-f435.onrender.com/api/v1
+
+      - name: Verify APK
+        working-directory: assetflow_mobile
+        run: |
+          test -f build/app/outputs/flutter-apk/app-release.apk
+          ls -lh build/app/outputs/flutter-apk/app-release.apk
+          echo "APK successfully created."
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: assetflow-release-apk
+          path: assetflow_mobile/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
