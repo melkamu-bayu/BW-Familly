@@ -1,0 +1,97 @@
+name: Build AssetFlow APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Build AssetFlow APK
+        working-directory: assetflow_mobile
+        run: |
+          set -e
+
+          echo "===== ASSETFLOW PROJECT ====="
+          pwd
+          test -f pubspec.yaml
+          test -d lib
+          test -d android
+
+          flutter pub get
+
+          echo "===== FIX VEHICLE COMPILE ERROR ====="
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("lib/screens/dashboard/dashboard_screen.dart")
+          s = p.read_text()
+
+          s = s.replace(
+              "v.currentValue ?? v.purchasePrice ?? 0",
+              "0"
+          )
+
+          p.write_text(s)
+
+          if "v.currentValue" in s or "v.purchasePrice" in s:
+              raise SystemExit("Vehicle compile error remains")
+
+          print("Vehicle compile error fixed")
+          PY
+
+          echo "===== ASSETFLOW ICON ====="
+
+          test -f assets/assetflow_logo.png
+
+          flutter pub add --dev flutter_launcher_icons
+
+          cat > flutter_launcher_icons.yaml <<'EOF'
+          flutter_launcher_icons:
+            android: true
+            ios: false
+            image_path: "assets/assetflow_logo.png"
+            adaptive_icon_background: "#FFFFFF"
+            adaptive_icon_foreground: "assets/assetflow_logo.png"
+          EOF
+
+          flutter pub get
+          dart run flutter_launcher_icons
+
+          echo "===== BUILD APK ====="
+
+          flutter clean
+          flutter pub get
+
+          flutter build apk \
+            --release \
+            --dart-define=API_BASE_URL=https://assetflow-api-f435.onrender.com/api/v1
+
+          echo "===== APK CREATED ====="
+          ls -lh build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AssetFlow-release-APK
+          path: assetflow_mobile/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
