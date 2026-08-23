@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme.dart';
 import '../../state/data_providers.dart';
 import '../../widgets/summary_card.dart';
+import '../../widgets/app_back_button.dart';
 
 class GoldProjectScreen extends ConsumerWidget {
   const GoldProjectScreen({super.key});
@@ -30,7 +31,7 @@ class GoldProjectScreen extends ConsumerWidget {
     final dashboardAsync = ref.watch(goldProjectDashboardProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Gold-Mining Project')),
+      appBar: AppBar(leading: const AppBackButton(), title: const Text('Gold-Mining Project')),
       body: dashboardAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (err, _) => const Center(child: Text('Could not load project dashboard')),

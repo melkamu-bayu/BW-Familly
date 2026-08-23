@@ -7,6 +7,7 @@ import '../../core/outbox_repository.dart';
 import '../../core/theme.dart';
 import '../../state/auth_provider.dart';
 import '../../state/lock_provider.dart';
+import '../../widgets/app_back_button.dart';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -76,7 +77,7 @@ class SettingsScreen extends ConsumerWidget {
     final user = authState.user;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
+      appBar: AppBar(leading: const AppBackButton(), title: const Text('Settings')),
       body: ListView(
         children: [
           if (user != null)

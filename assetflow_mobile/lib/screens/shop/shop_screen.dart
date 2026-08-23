@@ -6,6 +6,7 @@ import '../../state/data_providers.dart';
 import '../../widgets/summary_card.dart';
 import 'record_purchase_dialog.dart';
 import 'record_sale_dialog.dart';
+import '../../widgets/app_back_button.dart';
 
 class ShopScreen extends ConsumerWidget {
   const ShopScreen({super.key});
@@ -17,6 +18,7 @@ class ShopScreen extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
+        leading: const AppBackButton(),
         title: const Text('Construction Materials Shop'),
         actions: [
           IconButton(

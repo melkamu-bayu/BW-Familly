@@ -7,6 +7,7 @@ import '../../core/theme.dart';
 import '../../models/models.dart';
 import '../../state/data_providers.dart';
 import '../../widgets/summary_card.dart';
+import '../../widgets/app_back_button.dart';
 
 class PropertyDetailScreen extends ConsumerWidget {
   final String propertyId;
@@ -19,7 +20,7 @@ class PropertyDetailScreen extends ConsumerWidget {
     final dashboardAsync = ref.watch(propertyDashboardProvider(propertyId));
 
     return Scaffold(
-      appBar: AppBar(title: Text(property?.name ?? 'Property')),
+      appBar: AppBar(leading: const AppBackButton(), title: Text(property?.name ?? 'Property')),
       body: dashboardAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (err, _) => const Center(child: Text('Could not load property dashboard')),

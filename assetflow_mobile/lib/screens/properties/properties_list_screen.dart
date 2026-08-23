@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../widgets/summary_card.dart';
 import '../../state/data_providers.dart';
+import '../../widgets/app_back_button.dart';
 
 class PropertiesListScreen extends ConsumerWidget {
   const PropertiesListScreen({super.key});
@@ -26,7 +27,7 @@ class PropertiesListScreen extends ConsumerWidget {
     final propertiesAsync = ref.watch(propertiesProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Rental Houses')),
+      appBar: AppBar(leading: const AppBackButton(), title: const Text('Rental Houses')),
       body: propertiesAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (err, _) => const Center(child: Text('Could not load properties')),

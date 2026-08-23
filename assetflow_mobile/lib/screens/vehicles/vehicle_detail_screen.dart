@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../models/models.dart';
 import '../../state/data_providers.dart';
 import '../../widgets/summary_card.dart';
+import '../../widgets/app_back_button.dart';
 
 class VehicleDetailScreen extends ConsumerWidget {
   final String vehicleId;
@@ -16,7 +17,7 @@ class VehicleDetailScreen extends ConsumerWidget {
     final profitabilityAsync = ref.watch(vehicleProfitabilityProvider(vehicleId));
 
     return Scaffold(
-      appBar: AppBar(title: Text(vehicle?.name ?? 'Vehicle')),
+      appBar: AppBar(leading: const AppBackButton(), title: Text(vehicle?.name ?? 'Vehicle')),
       body: profitabilityAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (err, _) => const Center(child: Text('Could not load vehicle profitability')),

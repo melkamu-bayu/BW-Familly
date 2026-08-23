@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/theme.dart';
 import '../../state/data_providers.dart';
+import '../../widgets/app_back_button.dart';
 
 class AssetsHubScreen extends ConsumerWidget {
   const AssetsHubScreen({super.key});
@@ -19,7 +20,7 @@ class AssetsHubScreen extends ConsumerWidget {
     final lowStock = shop.valueOrNull?.lowStockCount;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Assets', style: TextStyle(fontWeight: FontWeight.w800))),
+      appBar: AppBar(leading: const AppBackButton(), title: const Text('Assets', style: TextStyle(fontWeight: FontWeight.w800))),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
         children: [

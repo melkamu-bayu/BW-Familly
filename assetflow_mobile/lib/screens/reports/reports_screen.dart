@@ -6,6 +6,7 @@ import '../../core/theme.dart';
 import '../../models/models.dart';
 import '../../state/data_providers.dart';
 import '../../widgets/summary_card.dart';
+import '../../widgets/app_back_button.dart';
 
 class ReportsScreen extends ConsumerWidget {
   const ReportsScreen({super.key});
@@ -31,7 +32,7 @@ class ReportsScreen extends ConsumerWidget {
     final payablesAsync = ref.watch(payablesProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Reports & Analytics')),
+      appBar: AppBar(leading: const AppBackButton(), title: const Text('Reports & Analytics')),
       body: RefreshIndicator(
         onRefresh: () async {
           ref.invalidate(profitLossReportProvider);

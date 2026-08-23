@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../state/data_providers.dart';
+import '../../widgets/app_back_button.dart';
 
 class VehiclesListScreen extends ConsumerWidget {
   const VehiclesListScreen({super.key});
@@ -29,7 +30,7 @@ class VehiclesListScreen extends ConsumerWidget {
     final vehiclesAsync = ref.watch(vehiclesProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Vehicles')),
+      appBar: AppBar(leading: const AppBackButton(), title: const Text('Vehicles')),
       body: vehiclesAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (err, _) => const Center(child: Text('Could not load vehicles')),
