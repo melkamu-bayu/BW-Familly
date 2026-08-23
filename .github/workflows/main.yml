@@ -1,0 +1,135 @@
+name: AssetFlow APK Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    name: Build AssetFlow Release APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Verify Flutter project
+        shell: bash
+        run: |
+          set -e
+
+          test -f assetflow_mobile/pubspec.yaml
+
+          echo "Flutter project found."
+          echo "Flutter version:"
+          flutter --version
+
+      - name: Prepare Android project
+        shell: bash
+        working-directory: assetflow_mobile
+        run: |
+          set -e
+
+          echo "Checking Android project..."
+
+          if [ ! -f android/settings.gradle ] && \
+             [ ! -f android/settings.gradle.kts ]; then
+
+            echo "Android project missing."
+            echo "Generating modern Flutter Android project..."
+
+            TEMP_DIR="$(mktemp -d)"
+
+            flutter create \
+              --platforms=android \
+              --org com.assetflow \
+              "$TEMP_DIR/app"
+
+            rm -rf android
+            cp -R "$TEMP_DIR/app/android" android
+
+            rm -rf "$TEMP_DIR"
+
+            echo "Modern Android project generated."
+          else
+            echo "Android project exists."
+          fi
+
+          test -f android/settings.gradle || \
+          test -f android/settings.gradle.kts
+
+          test -f android/app/build.gradle || \
+          test -f android/app/build.gradle.kts
+
+          echo "Android project verified."
+
+      - name: Add INTERNET permission
+        shell: bash
+        working-directory: assetflow_mobile
+        run: |
+          set -e
+
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+
+          test -f "$MANIFEST"
+
+          if ! grep -q "android.permission.INTERNET" "$MANIFEST"; then
+            sed -i '/<manifest[^>]*>/a\
+          <uses-permission android:name="android.permission.INTERNET"/>' "$MANIFEST"
+          fi
+
+          echo "INTERNET permission verified."
+
+      - name: Get Flutter dependencies
+        working-directory: assetflow_mobile
+        run: flutter pub get
+
+      - name: Build release APK
+        working-directory: assetflow_mobile
+        run: |
+          flutter build apk \
+            --release \
+            --dart-define=API_BASE_URL=https://assetflow-api-f435.onrender.com/api/v1
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -e
+
+          APK="assetflow_mobile/build/app/outputs/flutter-apk/app-release.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK was not created."
+            exit 1
+          fi
+
+          echo "======================================"
+          echo "APK BUILD SUCCESSFUL"
+          echo "======================================"
+          ls -lh "$APK"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AssetFlow-release-apk
+          path: assetflow_mobile/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 30
