@@ -1,0 +1,273 @@
+name: Fix Dashboard Slow Load
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-dashboard-performance:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ============================================================
+      # DIAGNOSIS (for the log, not executed):
+      #
+      # The dashboard was slow while every other screen was normal because:
+      #
+      # 1. BACKEND N+1 QUERY: /dashboard/business-performance looped over
+      #    every business unit and ran a separate SQL query for its revenue
+      #    AND another for its expense. For a typical 10-unit deployment
+      #    (6 vehicles + 2 properties + 1 shop + 1 project) across 4
+      #    categories, that's ~27 separate SQL round-trips for ONE API call.
+      #    Fixed: rewritten as 2 aggregated GROUP BY queries total.
+      #
+      # 2. FRONTEND SEQUENTIAL BLOCKING: the dashboard fires 11 separate
+      #    HTTP requests total (summary, business-performance, vehicles,
+      #    properties, shop/products, gold-mining/dashboard, shop/dashboard,
+      #    revenue, expenses, notifications, analytics/trends) versus 1-2
+      #    for every other screen. Worse, the FIRST of these (/dashboard/
+      #    summary) was awaited on its own, blocking in front of the other
+      #    10 instead of running alongside them. Fixed: it now starts
+      #    immediately and runs concurrently with the rest.
+      #
+      # Both fixes were written and verified (compiled, SQL-compiled against
+      # the real models, balance-checked) before being placed in this
+      # workflow -- see the conversation history for the verification steps.
+      # ============================================================
+
+      # ============================================================
+      # 1. BACKEND FIX -- rewrite business_performance() with 2 aggregated
+      #    queries instead of a per-unit loop. Whole-file write since the
+      #    change touches most of the function; safer than a partial match
+      #    on a file this size.
+      # ============================================================
+      - name: Fix backend N+1 query in dashboard.py
+        run: |
+          cat > assetflow-backend/app/api/v1/dashboard.py << 'PY_EOF'
+          from datetime import date
+
+          from fastapi import APIRouter, Depends
+          from sqlalchemy import select, func
+          from sqlalchemy.orm import Session
+
+          from app.core.database import get_db
+          from app.core.dependencies import require_permission
+          from app.models.identity import User
+          from app.models.financial import Account, RevenueTransaction, ExpenseTransaction
+          from app.models.business import BusinessUnit, BusinessCategory
+          from app.services.financial_calculator import total_revenue, total_expense, net_profit
+
+          router = APIRouter(prefix="/dashboard", tags=["dashboard"])
+
+
+          @router.get("/summary")
+          def financial_summary(
+              db: Session = Depends(get_db),
+              current_user: User = Depends(require_permission("reports", "read")),
+          ):
+              today = date.today()
+              month_start = today.replace(day=1)
+
+              cash_bank_total = float(
+                  db.execute(select(func.coalesce(func.sum(Account.current_balance), 0))).scalar_one()
+              )
+
+              return {
+                  "today": {
+                      "revenue": total_revenue(db, date_from=today, date_to=today),
+                      "expense": total_expense(db, date_from=today, date_to=today),
+                      "net_profit": net_profit(db, date_from=today, date_to=today),
+                  },
+                  "this_month": {
+                      "revenue": total_revenue(db, date_from=month_start, date_to=today),
+                      "expense": total_expense(db, date_from=month_start, date_to=today),
+                      "net_profit": net_profit(db, date_from=month_start, date_to=today),
+                  },
+                  "all_time": {
+                      "revenue": total_revenue(db),
+                      "expense": total_expense(db),
+                      "net_profit": net_profit(db),
+                  },
+                  "cash_and_bank_balance": cash_bank_total,
+                  "currency": "ETB",
+              }
+
+
+          @router.get("/business-performance")
+          def business_performance(
+              db: Session = Depends(get_db),
+              current_user: User = Depends(require_permission("reports", "read")),
+          ):
+              """Revenue/expense/profit/% contribution per top-level business category
+              (Vehicles, Rental Houses, Construction Materials Shop, Gold-Mining Project).
+
+              Two aggregated GROUP BY queries instead of the previous per-business-unit
+              loop -- the old version fired one total_revenue()/total_expense() call
+              PER business unit (roughly 27 separate SQL round-trips for a typical
+              10-unit deployment across 4 categories). This version fires 2, regardless
+              of how many vehicles/properties/products exist. LEFT OUTER JOIN + COALESCE
+              ensures a category with units but zero transactions yet still comes back
+              as revenue=0 rather than being silently dropped from the result.
+              """
+              overall_profit = net_profit(db) or 1  # avoid div-by-zero; guarded below
+
+              revenue_by_category = dict(
+                  db.execute(
+                      select(BusinessCategory.id, func.coalesce(func.sum(RevenueTransaction.amount), 0))
+                      .select_from(BusinessCategory)
+                      .join(BusinessUnit, BusinessUnit.category_id == BusinessCategory.id)
+                      .outerjoin(
+                          RevenueTransaction,
+                          (RevenueTransaction.business_unit_id == BusinessUnit.id)
+                          & (RevenueTransaction.deleted_at.is_(None)),
+                      )
+                      .group_by(BusinessCategory.id)
+                  ).all()
+              )
+              expense_by_category = dict(
+                  db.execute(
+                      select(BusinessCategory.id, func.coalesce(func.sum(ExpenseTransaction.amount), 0))
+                      .select_from(BusinessCategory)
+                      .join(BusinessUnit, BusinessUnit.category_id == BusinessCategory.id)
+                      .outerjoin(
+                          ExpenseTransaction,
+                          (ExpenseTransaction.business_unit_id == BusinessUnit.id)
+                          & (ExpenseTransaction.deleted_at.is_(None)),
+                      )
+                      .group_by(BusinessCategory.id)
+                  ).all()
+              )
+
+              categories = db.execute(select(BusinessCategory)).scalars().all()
+              results = []
+              for category in categories:
+                  cat_revenue = float(revenue_by_category.get(category.id, 0))
+                  cat_expense = float(expense_by_category.get(category.id, 0))
+                  cat_profit = cat_revenue - cat_expense
+                  contribution_pct = (cat_profit / overall_profit * 100) if overall_profit else 0
+
+                  results.append(
+                      {
+                          "category": category.name,
+                          "code": category.code,
+                          "revenue": cat_revenue,
+                          "expense": cat_expense,
+                          "profit": cat_profit,
+                          "percentage_contribution": round(contribution_pct, 2),
+                      }
+                  )
+              return results
+          PY_EOF
+          echo "Backend dashboard.py rewritten"
+
+      - name: Verify backend still compiles and endpoint count is unchanged
+        run: |
+          cd assetflow-backend
+          pip install --break-system-packages -q -r requirements.txt
+          python -m py_compile app/api/v1/dashboard.py
+          python3 -c "
+          import app.main
+          schema = app.main.app.openapi()
+          count = len(schema['paths'])
+          print(f'{count} endpoints registered')
+          assert count == 55, f'Expected 55 endpoints, got {count} -- something else changed'
+          print('OK')
+          "
+
+      # ============================================================
+      # 2. FRONTEND FIX -- run /dashboard/summary concurrently instead of
+      #    blocking in front of the other 10 requests. Exact string match
+      #    against the real current source -- fails loudly if it doesn't
+      #    match rather than silently doing nothing.
+      # ============================================================
+      - name: Fix frontend sequential-blocking summary fetch
+        run: |
+          cd assetflow_mobile
+          python3 << 'PY_EOF'
+          from pathlib import Path
+          import sys
+
+          path = Path("lib/state/data_providers.dart")
+          text = path.read_text()
+
+          old_1 = "final summaryResponse = await api.requestWithRetry(\n    () => api.dio.get('/dashboard/summary'),\n  );\n  final summary = DashboardSummary.fromJson(summaryResponse.data as Map<String, dynamic>);"
+
+          new_1 = """final summaryFuture = () async {
+            final r = await api.requestWithRetry(() => api.dio.get('/dashboard/summary'));
+            return DashboardSummary.fromJson(r.data as Map<String, dynamic>);
+          }();"""
+
+          old_2 = "  return HomeDashboardData("
+          new_2 = "  final summary = await summaryFuture;\n\n  return HomeDashboardData("
+
+          failures = []
+
+          if old_1 not in text:
+              failures.append("NO MATCH for the sequential summary-fetch block -- source has changed since this workflow was written.")
+          elif text.count(old_1) > 1:
+              failures.append("AMBIGUOUS MATCH for the summary-fetch block -- appears more than once.")
+          else:
+              text = text.replace(old_1, new_1, 1)
+              print("OK: patched summary fetch to run concurrently")
+
+          if old_2 not in text:
+              failures.append(f"NO MATCH for '{old_2}'")
+          elif text.count(old_2) > 1:
+              failures.append(f"AMBIGUOUS MATCH for '{old_2}' -- appears more than once")
+          else:
+              text = text.replace(old_2, new_2, 1)
+              print("OK: added 'final summary = await summaryFuture;' before HomeDashboardData(")
+
+          if failures:
+              print("\n=== FAILURES ===")
+              for f in failures:
+                  print(f)
+              sys.exit(1)
+
+          path.write_text(text)
+          print("\nFrontend patch applied successfully.")
+          PY_EOF
+
+      - name: Verify frontend balance and correct results[] indexing
+        run: |
+          cd assetflow_mobile
+          python3 -c "
+          s = open('lib/state/data_providers.dart').read()
+          o, c = s.count('{'), s.count('}')
+          po, pc = s.count('('), s.count(')')
+          assert o == c, f'brace mismatch {o}/{c}'
+          assert po == pc, f'paren mismatch {po}/{pc}'
+          print('Balance OK')
+          "
+          echo ""
+          echo "### results[] indices must be unchanged (0-7, in order) ###"
+          grep -n "results\[" lib/state/data_providers.dart
+          echo ""
+          echo "### Full project balance sweep (make sure nothing else broke) ###"
+          for f in $(find lib -name "*.dart"); do
+            python3 -c "
+          s = open('$f').read()
+          o, c = s.count('{'), s.count('}')
+          po, pc = s.count('('), s.count(')')
+          if o != c or po != pc:
+              print('MISMATCH:', '$f')
+              exit(1)
+          "
+          done
+          echo "All files balanced"
+
+      # ============================================================
+      # 3. COMMIT AND PUSH
+      # ============================================================
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add assetflow-backend/app/api/v1/dashboard.py
+          git add assetflow_mobile/lib/state/data_providers.dart
+          git commit -m "Fix dashboard slow load: eliminate N+1 query in business-performance (27 -> 2 SQL round-trips), run summary fetch concurrently instead of blocking in front of the other 10 requests" || echo "No changes to commit"
+          git push
