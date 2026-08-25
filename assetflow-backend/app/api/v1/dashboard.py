@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.dependencies import require_permission
 from app.models.identity import User
-from app.models.financial import Account
+from app.models.financial import Account, RevenueTransaction, ExpenseTransaction
 from app.models.business import BusinessUnit, BusinessCategory
 from app.services.financial_calculator import total_revenue, total_expense, net_profit
 
@@ -53,19 +53,50 @@ def business_performance(
     current_user: User = Depends(require_permission("reports", "read")),
 ):
     """Revenue/expense/profit/% contribution per top-level business category
-    (Vehicles, Rental Houses, Construction Materials Shop, Gold-Mining Project)."""
-    categories = db.execute(select(BusinessCategory)).scalars().all()
+    (Vehicles, Rental Houses, Construction Materials Shop, Gold-Mining Project).
+
+    Two aggregated GROUP BY queries instead of the previous per-business-unit
+    loop -- the old version fired one total_revenue()/total_expense() call
+    PER business unit (roughly 27 separate SQL round-trips for a typical
+    10-unit deployment across 4 categories). This version fires 2, regardless
+    of how many vehicles/properties/products exist. LEFT OUTER JOIN + COALESCE
+    ensures a category with units but zero transactions yet still comes back
+    as revenue=0 rather than being silently dropped from the result.
+    """
     overall_profit = net_profit(db) or 1  # avoid div-by-zero; guarded below
 
+    revenue_by_category = dict(
+        db.execute(
+            select(BusinessCategory.id, func.coalesce(func.sum(RevenueTransaction.amount), 0))
+            .select_from(BusinessCategory)
+            .join(BusinessUnit, BusinessUnit.category_id == BusinessCategory.id)
+            .outerjoin(
+                RevenueTransaction,
+                (RevenueTransaction.business_unit_id == BusinessUnit.id)
+                & (RevenueTransaction.deleted_at.is_(None)),
+            )
+            .group_by(BusinessCategory.id)
+        ).all()
+    )
+    expense_by_category = dict(
+        db.execute(
+            select(BusinessCategory.id, func.coalesce(func.sum(ExpenseTransaction.amount), 0))
+            .select_from(BusinessCategory)
+            .join(BusinessUnit, BusinessUnit.category_id == BusinessCategory.id)
+            .outerjoin(
+                ExpenseTransaction,
+                (ExpenseTransaction.business_unit_id == BusinessUnit.id)
+                & (ExpenseTransaction.deleted_at.is_(None)),
+            )
+            .group_by(BusinessCategory.id)
+        ).all()
+    )
+
+    categories = db.execute(select(BusinessCategory)).scalars().all()
     results = []
     for category in categories:
-        unit_ids = [
-            u.id for u in db.execute(
-                select(BusinessUnit).where(BusinessUnit.category_id == category.id)
-            ).scalars().all()
-        ]
-        cat_revenue = sum(total_revenue(db, business_unit_id=uid) for uid in unit_ids)
-        cat_expense = sum(total_expense(db, business_unit_id=uid) for uid in unit_ids)
+        cat_revenue = float(revenue_by_category.get(category.id, 0))
+        cat_expense = float(expense_by_category.get(category.id, 0))
         cat_profit = cat_revenue - cat_expense
         contribution_pct = (cat_profit / overall_profit * 100) if overall_profit else 0
 

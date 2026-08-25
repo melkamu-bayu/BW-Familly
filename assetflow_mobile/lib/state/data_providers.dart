@@ -130,10 +130,10 @@ final insightsProvider = FutureProvider.autoDispose<List<Insight>>((ref) async {
 final homeDashboardProvider = FutureProvider.autoDispose<HomeDashboardData>((ref) async {
   final api = ApiClient.instance;
 
-  final summaryResponse = await api.requestWithRetry(
-    () => api.dio.get('/dashboard/summary'),
-  );
-  final summary = DashboardSummary.fromJson(summaryResponse.data as Map<String, dynamic>);
+  final summaryFuture = () async {
+  final r = await api.requestWithRetry(() => api.dio.get('/dashboard/summary'));
+  return DashboardSummary.fromJson(r.data as Map<String, dynamic>);
+}();
 
   Future<List<T>> safeList<T>(Future<List<T>> Function() loader) async {
     try {
@@ -236,6 +236,8 @@ final homeDashboardProvider = FutureProvider.autoDispose<HomeDashboardData>((ref
       return (r.data as List).where((e) => e['is_read'] == false).length;
     }),
   ]);
+
+  final summary = await summaryFuture;
 
   return HomeDashboardData(
     summary: summary,
