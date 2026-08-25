@@ -18,12 +18,12 @@ from app.models.business import BusinessCategory, BusinessUnit, Vehicle, Propert
 from app.models.financial import Account
 
 VEHICLE_NAMES = [
-    "EX-454",
-    "EX-3952A28405/0100",
+    "EX-3952",
+    "EX-4541",
     "A26401/15598",
     "A19876/35760",
-    "Apache-Motor",
-    "Land-Cruiser-Car",
+    "A28405/01001",
+    "Land-Cruiser",
 ]
 HOUSE_NAMES = ["Kush-House", "Kosober-House"]
 
@@ -113,9 +113,9 @@ def seed(db: Session) -> None:
     categories = {}
     for code, name in [
         ("VEHICLES", "Vehicles"),
-        ("RENTAL_HOUSES", "Rental Houses"),
-        ("SHOP", "Construction Materials Shop"),
-        ("PROJECT", "Gold-Mining Project"),
+        ("RENTAL_HOUSES", "Houses"),
+        ("SHOP", "Shops"),
+        ("PROJECT", "Projects"),
     ]:
         cat = db.query(BusinessCategory).filter(BusinessCategory.code == code).one_or_none()
         if cat is None:
@@ -146,14 +146,14 @@ def seed(db: Session) -> None:
     # --- Construction Materials Shop (single unit, Section 6/31) ---
     shop_unit = db.query(BusinessUnit).filter(BusinessUnit.unit_type == "shop").one_or_none()
     if shop_unit is None:
-        shop_unit = BusinessUnit(category_id=categories["SHOP"].id, unit_type="shop", name="Construction Materials Shop")
+        shop_unit = BusinessUnit(category_id=categories["SHOP"].id, unit_type="shop", name="Shops")
         db.add(shop_unit)
         db.flush()
 
     # --- Gold-Mining Project (Section 31) ---
     project_unit = db.query(BusinessUnit).filter(BusinessUnit.unit_type == "project").one_or_none()
     if project_unit is None:
-        project_unit = BusinessUnit(category_id=categories["PROJECT"].id, unit_type="project", name="Gold-Mining Project")
+        project_unit = BusinessUnit(category_id=categories["PROJECT"].id, unit_type="project", name="Projects")
         db.add(project_unit)
         db.flush()
         db.add(Project(business_unit_id=project_unit.id, status="planning"))

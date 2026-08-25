@@ -74,8 +74,8 @@ class _HomeContent extends StatelessWidget {
       _AssetTileData('Machines', '${machineVehicles.length} Assets', machineValue, AppTheme.orange, Icons.construction, '/vehicles'),
       _AssetTileData('Vehicles', '${roadVehicles.length} Vehicles', roadVehicleValue, AppTheme.blue, Icons.directions_car, '/vehicles'),
       _AssetTileData('Projects', data.project == null ? '0 Projects' : '1 Project', projectValue, AppTheme.green, Icons.apartment, '/gold-project'),
-      _AssetTileData('Rent Properties', '${data.properties.length} Properties', propertyValue, AppTheme.purple, Icons.home_work_outlined, '/properties'),
-      _AssetTileData('Shop', data.shop == null ? '0 Shops' : '1 Shop', shopValue, AppTheme.orange, Icons.storefront, '/shop'),
+      _AssetTileData('Houses', '${data.properties.length} Properties', propertyValue, AppTheme.purple, Icons.home_work_outlined, '/properties'),
+      _AssetTileData('Shops', data.shop == null ? '0 Shops' : '1 Shop', shopValue, AppTheme.orange, Icons.storefront, '/shop'),
       _AssetTileData('Total Assets', '$managedAssetCount Managed', machineValue + roadVehicleValue + propertyValue + shopValue + projectValue, AppTheme.navy, Icons.pie_chart_outline, '/accounts'),
     ];
 
@@ -145,7 +145,7 @@ class _HomeContent extends StatelessWidget {
   bool _looksLikeMachine(Vehicle v) {
     final name = v.name.toUpperCase();
     final type = (v.vehicleType ?? '').toUpperCase();
-    return name.startsWith('EX-') || name.startsWith('A') || type.contains('EXCAV') || type.contains('MACHINE');
+    return name.startsWith('EX-') || type.contains('EXCAV') || type.contains('MACHINE');
   }
 
   void _showQuickActions(BuildContext context) => showModalBottomSheet<void>(
