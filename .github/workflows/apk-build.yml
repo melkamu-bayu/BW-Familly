@@ -1,0 +1,408 @@
+name: AssetFlow Mobile - Fix and Build APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-build:
+    name: Fix Source and Build Production APK
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+
+      # ==========================================================
+      # 1. CHECKOUT
+      # ==========================================================
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ==========================================================
+      # 2. JAVA
+      # ==========================================================
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # ==========================================================
+      # 3. FLUTTER
+      # ==========================================================
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.35.7"
+          channel: stable
+          cache: true
+
+      # ==========================================================
+      # 4. VERIFY PROJECT
+      # ==========================================================
+      - name: Verify Flutter project
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          test -f pubspec.yaml
+          test -f lib/main.dart
+          test -f lib/models/models.dart
+          test -f lib/screens/dashboard/dashboard_screen.dart
+          test -f test/widget_test.dart
+
+          echo "Flutter project verified."
+
+      # ==========================================================
+      # 5. FIX DASHBOARD VEHICLE MODEL ERROR
+      #
+      # Vehicle does NOT contain:
+      #   currentValue
+      #   purchasePrice
+      #
+      # Do not invent those fields.
+      # Remove those invalid references and use zero until
+      # the backend provides a supported vehicle value field.
+      # ==========================================================
+      - name: Fix dashboard Vehicle fields
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          FILE="lib/screens/dashboard/dashboard_screen.dart"
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("lib/screens/dashboard/dashboard_screen.dart")
+          text = path.read_text()
+
+          old1 = "v.currentValue ?? v.purchasePrice ?? 0"
+          old2 = "v.currentValue ?? v.purchasePrice ?? 0"
+
+          changed = False
+
+          if old1 in text:
+              text = text.replace(
+                  old1,
+                  "0",
+              )
+              changed = True
+
+          if old2 in text:
+              text = text.replace(
+                  old2,
+                  "0",
+              )
+              changed = True
+
+          # Also remove the invalid pattern if formatting differs.
+          text = text.replace(
+              "v.currentValue ?? v.purchasePrice ?? 0",
+              "0",
+          )
+
+          path.write_text(text)
+
+          if changed:
+              print("Dashboard Vehicle value references fixed.")
+          else:
+              print("No invalid Vehicle value references found.")
+          PY
+
+          if grep -nE \
+            'currentValue|purchasePrice' \
+            "$FILE"; then
+
+            echo "ERROR: Invalid Vehicle fields still exist."
+            exit 1
+          fi
+
+          echo "Dashboard Vehicle fields verified."
+
+      # ==========================================================
+      # 6. FIX WIDGET TEST
+      #
+      # main.dart exposes AssetFlowApp, not MyApp.
+      # ==========================================================
+      - name: Fix widget test application class
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          FILE="test/widget_test.dart"
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("test/widget_test.dart")
+          text = path.read_text()
+
+          if "MyApp()" in text:
+              text = text.replace(
+                  "MyApp()",
+                  "AssetFlowApp()"
+              )
+
+          if "const MyApp()" in text:
+              text = text.replace(
+                  "const MyApp()",
+                  "const AssetFlowApp()"
+              )
+
+          path.write_text(text)
+
+          print("Widget test application class updated.")
+          PY
+
+          grep -n "AssetFlowApp" "$FILE"
+
+          if grep -n "MyApp" "$FILE"; then
+            echo "ERROR: MyApp reference still exists."
+            exit 1
+          fi
+
+      # ==========================================================
+      # 7. SHOW SOURCE CHANGES
+      # ==========================================================
+      - name: Show source fixes
+        run: |
+          set -euo pipefail
+
+          git diff -- \
+            assetflow_mobile/lib/screens/dashboard/dashboard_screen.dart \
+            assetflow_mobile/test/widget_test.dart
+
+      # ==========================================================
+      # 8. GENERATE ANDROID
+      # ==========================================================
+      - name: Generate Android project
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          rm -rf android
+
+          flutter create \
+            --platforms=android \
+            --project-name=assetflow_mobile \
+            --org=com.bwfamily \
+            .
+
+          echo "Android project generated."
+
+      # ==========================================================
+      # 9. VERIFY ANDROID
+      # ==========================================================
+      - name: Verify Android Gradle project
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          test -d android
+          test -d android/app
+          test -f android/gradlew
+          test -f android/gradle/wrapper/gradle-wrapper.properties
+          test -f android/app/src/main/AndroidManifest.xml
+
+          if [ -f android/app/build.gradle.kts ]; then
+            echo "Found build.gradle.kts"
+          elif [ -f android/app/build.gradle ]; then
+            echo "Found build.gradle"
+          else
+            echo "ERROR: Android Gradle build file missing."
+            exit 1
+          fi
+
+          echo "Android project verified."
+
+      # ==========================================================
+      # 10. INTERNET PERMISSION
+      # ==========================================================
+      - name: Configure INTERNET permission
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path(
+              "android/app/src/main/AndroidManifest.xml"
+          )
+
+          text = path.read_text()
+
+          permission = (
+              '<uses-permission '
+              'android:name="android.permission.INTERNET"/>'
+          )
+
+          if permission not in text:
+              manifest = text.find("<manifest")
+
+              if manifest == -1:
+                  raise SystemExit(
+                      "ERROR: manifest tag not found."
+                  )
+
+              end = text.find(">", manifest)
+
+              if end == -1:
+                  raise SystemExit(
+                      "ERROR: invalid manifest."
+                  )
+
+              text = (
+                  text[:end + 1]
+                  + "\n    "
+                  + permission
+                  + "\n"
+                  + text[end + 1:]
+              )
+
+              path.write_text(text)
+
+          if permission not in path.read_text():
+              raise SystemExit(
+                  "ERROR: INTERNET permission missing."
+              )
+
+          print("INTERNET permission verified.")
+          PY
+
+      # ==========================================================
+      # 11. VERIFY API
+      # ==========================================================
+      - name: Verify production API
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          grep -R \
+            "https://assetflow-api-f435.onrender.com/api/v1" \
+            lib/core \
+            >/dev/null
+
+          echo "Production API URL verified."
+
+      # ==========================================================
+      # 12. CLEAN
+      # ==========================================================
+      - name: Flutter clean
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          flutter clean
+
+      # ==========================================================
+      # 13. DEPENDENCIES
+      # ==========================================================
+      - name: Flutter pub get
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          flutter pub get
+
+      # ==========================================================
+      # 14. ANALYZE
+      #
+      # Do NOT fail because of informational warnings.
+      # But real Dart errors must stop the build.
+      # ==========================================================
+      - name: Flutter analyze
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          flutter analyze
+
+      # ==========================================================
+      # 15. RUN TESTS
+      # ==========================================================
+      - name: Flutter tests
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          flutter test
+
+      # ==========================================================
+      # 16. BUILD APK
+      # ==========================================================
+      - name: Build release APK
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          flutter build apk \
+            --release \
+            --dart-define=API_BASE_URL=https://assetflow-api-f435.onrender.com/api/v1
+
+      # ==========================================================
+      # 17. VERIFY APK
+      # ==========================================================
+      - name: Verify APK
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          APK="build/app/outputs/flutter-apk/app-release.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK not found."
+            find build -type f | sort || true
+            exit 1
+          fi
+
+          echo "=========================================="
+          echo " APK BUILD SUCCESSFUL"
+          echo "=========================================="
+
+          ls -lh "$APK"
+
+      # ==========================================================
+      # 18. UPLOAD APK
+      # ==========================================================
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AssetFlow-production-release
+          path: assetflow_mobile/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+
+      # ==========================================================
+      # 19. COMMIT SOURCE FIXES
+      # ==========================================================
+      - name: Commit source fixes
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add \
+            assetflow_mobile/lib/screens/dashboard/dashboard_screen.dart \
+            assetflow_mobile/test/widget_test.dart
+
+          if git diff --cached --quiet; then
+            echo "No source changes to commit."
+            exit 0
+          fi
+
+          git commit \
+            -m "Fix AssetFlow APK compile errors"
+
+          git push
+
+          echo "Source fixes committed successfully."
