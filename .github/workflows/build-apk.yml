@@ -1,0 +1,315 @@
+name: AssetFlow Mobile - Production APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    name: Build Production APK
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+
+      # ==========================================================
+      # 1. CHECKOUT
+      # ==========================================================
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ==========================================================
+      # 2. JAVA
+      # ==========================================================
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      # ==========================================================
+      # 3. FLUTTER
+      # ==========================================================
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.35.7"
+          channel: stable
+          cache: true
+
+      # ==========================================================
+      # 4. VERIFY FLUTTER SOURCE
+      # ==========================================================
+      - name: Verify Flutter project
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          echo "Flutter version:"
+          flutter --version
+
+          echo ""
+          echo "Project directory:"
+          pwd
+
+          test -f pubspec.yaml
+          test -f lib/main.dart
+
+          echo ""
+          echo "Flutter source project verified."
+
+      # ==========================================================
+      # 5. CHECK PRODUCTION API
+      # ==========================================================
+      - name: Check production API
+        run: |
+          set -euo pipefail
+
+          API_URL="https://assetflow-api-f435.onrender.com/docs"
+
+          HTTP_CODE="$(
+            curl \
+              --fail \
+              --silent \
+              --show-error \
+              --location \
+              --connect-timeout 15 \
+              --max-time 60 \
+              --output /dev/null \
+              --write-out "%{http_code}" \
+              "$API_URL"
+          )"
+
+          echo "Production API HTTP status: $HTTP_CODE"
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "ERROR: Production API check failed."
+            exit 1
+          fi
+
+          echo "Production API is reachable."
+
+      # ==========================================================
+      # 6. REMOVE INCOMPLETE ANDROID PLATFORM
+      #
+      # The repository does not contain Android platform files.
+      # Generate a clean platform every time.
+      # ==========================================================
+      - name: Prepare Android platform
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          echo "Removing any incomplete Android platform..."
+
+          rm -rf android
+
+          echo "Generating Android platform..."
+
+          flutter create \
+            --platforms=android \
+            --project-name=assetflow_mobile \
+            --org=com.bwfamily \
+            .
+
+          echo "Android platform generated."
+
+      # ==========================================================
+      # 7. VERIFY ANDROID PROJECT
+      # ==========================================================
+      - name: Verify Android Gradle project
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          test -d android
+          test -d android/app
+          test -f android/settings.gradle.kts || \
+          test -f android/settings.gradle
+
+          if [ -f android/app/build.gradle.kts ]; then
+            echo "Found:"
+            echo "android/app/build.gradle.kts"
+          elif [ -f android/app/build.gradle ]; then
+            echo "Found:"
+            echo "android/app/build.gradle"
+          else
+            echo "ERROR: No Android app Gradle file exists."
+            echo ""
+            echo "Android directory:"
+            find android -maxdepth 3 -type f | sort
+            exit 1
+          fi
+
+          test -f android/app/src/main/AndroidManifest.xml
+
+          echo ""
+          echo "Android project verification PASSED."
+
+      # ==========================================================
+      # 8. INTERNET PERMISSION
+      # ==========================================================
+      - name: Configure Android INTERNET permission
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+
+          test -f "$MANIFEST"
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("android/app/src/main/AndroidManifest.xml")
+          text = path.read_text()
+
+          permission = (
+              '<uses-permission '
+              'android:name="android.permission.INTERNET"/>'
+          )
+
+          if permission not in text:
+              manifest_start = text.find("<manifest")
+
+              if manifest_start == -1:
+                  raise SystemExit(
+                      "ERROR: <manifest> tag not found."
+                  )
+
+              manifest_end = text.find(">", manifest_start)
+
+              if manifest_end == -1:
+                  raise SystemExit(
+                      "ERROR: Invalid AndroidManifest.xml."
+                  )
+
+              text = (
+                  text[:manifest_end + 1]
+                  + "\n    "
+                  + permission
+                  + "\n"
+                  + text[manifest_end + 1:]
+              )
+
+              path.write_text(text)
+
+          if permission not in path.read_text():
+              raise SystemExit(
+                  "ERROR: INTERNET permission was not added."
+              )
+
+          print("INTERNET permission verified.")
+          PY
+
+      # ==========================================================
+      # 9. VERIFY API CONFIGURATION
+      # ==========================================================
+      - name: Verify production API configuration
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          CONFIG="lib/core/config.dart"
+
+          test -f "$CONFIG"
+
+          grep -F \
+            "https://assetflow-api-f435.onrender.com/api/v1" \
+            "$CONFIG"
+
+          echo "Production API configuration verified."
+
+      # ==========================================================
+      # 10. CLEAN FLUTTER
+      # ==========================================================
+      - name: Flutter clean
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          flutter clean
+
+      # ==========================================================
+      # 11. GET DEPENDENCIES
+      # ==========================================================
+      - name: Flutter pub get
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          flutter pub get
+
+      # ==========================================================
+      # 12. VERIFY DEPENDENCY TREE
+      # ==========================================================
+      - name: Verify Flutter dependencies
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          flutter pub deps --style=compact
+
+      # ==========================================================
+      # 13. ANALYZE DART
+      # ==========================================================
+      - name: Flutter analyze
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          flutter analyze
+
+      # ==========================================================
+      # 14. BUILD RELEASE APK
+      # ==========================================================
+      - name: Build release APK
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          flutter build apk \
+            --release \
+            --dart-define=API_BASE_URL=https://assetflow-api-f435.onrender.com/api/v1
+
+      # ==========================================================
+      # 15. VERIFY APK
+      # ==========================================================
+      - name: Verify APK
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          APK="build/app/outputs/flutter-apk/app-release.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK was not generated."
+            echo ""
+            echo "Build directory:"
+            find build -type f 2>/dev/null | sort || true
+            exit 1
+          fi
+
+          echo ""
+          echo "=============================================="
+          echo "       ASSETFLOW APK BUILD SUCCESS"
+          echo "=============================================="
+          echo ""
+          ls -lh "$APK"
+          echo ""
+
+      # ==========================================================
+      # 16. UPLOAD APK
+      # ==========================================================
+      - name: Upload release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AssetFlow-production-release
+          path: assetflow_mobile/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
