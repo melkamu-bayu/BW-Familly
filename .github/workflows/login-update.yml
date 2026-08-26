@@ -1,0 +1,816 @@
+name: AssetFlow Login Page Update
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  PROJECT_DIR: assetflow_mobile
+  FLUTTER_VERSION: "3.35.7"
+  API_BASE_URL: "https://assetflow-api-f435.onrender.com/api/v1"
+
+jobs:
+  update-login-page:
+    name: Update AssetFlow Login UI and Build APK
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # ============================================================
+      # 1. CHECKOUT
+      # ============================================================
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # ============================================================
+      # 2. FLUTTER
+      # ============================================================
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      # ============================================================
+      # 3. VERIFY THE REAL PROJECT
+      # ============================================================
+      - name: Verify AssetFlow project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -d "$PROJECT_DIR"
+          test -f "$PROJECT_DIR/pubspec.yaml"
+          test -d "$PROJECT_DIR/lib"
+          test -d "$PROJECT_DIR/android"
+
+          test -f "$PROJECT_DIR/lib/screens/auth/login_screen.dart"
+          test -f "$PROJECT_DIR/assets/assetflow_logo.png"
+
+          echo "=========================================="
+          echo "AssetFlow project verified"
+          echo "=========================================="
+          echo "Project: $PROJECT_DIR"
+          echo "Login:   $PROJECT_DIR/lib/screens/auth/login_screen.dart"
+          echo "Logo:    $PROJECT_DIR/assets/assetflow_logo.png"
+
+      # ============================================================
+      # 4. JAVA
+      # ============================================================
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # ============================================================
+      # 5. REPLACE LOGIN PAGE
+      # ============================================================
+      - name: Update professional AssetFlow login page
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > lib/screens/auth/login_screen.dart <<'DART'
+          import 'package:flutter/material.dart';
+          import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+          import '../../core/theme.dart';
+          import '../../state/auth_provider.dart';
+
+          class LoginScreen extends ConsumerStatefulWidget {
+            const LoginScreen({super.key});
+
+            @override
+            ConsumerState<LoginScreen> createState() => _LoginScreenState();
+          }
+
+          class _LoginScreenState extends ConsumerState<LoginScreen> {
+            final _emailController = TextEditingController();
+            final _passwordController = TextEditingController();
+
+            bool _loading = false;
+            bool _obscurePassword = true;
+            String? _error;
+
+            Future<void> _submit() async {
+              FocusManager.instance.primaryFocus?.unfocus();
+
+              final email = _emailController.text.trim();
+              final password = _passwordController.text;
+
+              if (email.isEmpty || password.isEmpty) {
+                setState(() {
+                  _error = 'Please enter your email and password.';
+                });
+                return;
+              }
+
+              setState(() {
+                _loading = true;
+                _error = null;
+              });
+
+              final error = await ref
+                  .read(authProvider.notifier)
+                  .login(email, password);
+
+              if (!mounted) return;
+
+              setState(() {
+                _loading = false;
+                _error = error;
+              });
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              final size = MediaQuery.sizeOf(context);
+
+              return Scaffold(
+                backgroundColor: const Color(0xFFF6F9FD),
+                resizeToAvoidBottomInset: true,
+                body: SafeArea(
+                  child: SingleChildScrollView(
+                    physics: const BouncingScrollPhysics(),
+                    child: Column(
+                      children: [
+                        _buildHero(size),
+
+                        Transform.translate(
+                          offset: const Offset(0, -24),
+                          child: _buildLoginCard(),
+                        ),
+
+                        Transform.translate(
+                          offset: const Offset(0, -12),
+                          child: _buildSecurityMessage(),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            }
+
+            Widget _buildHero(Size size) {
+              final heroHeight = size.height < 700 ? 360.0 : 465.0;
+
+              return SizedBox(
+                height: heroHeight,
+                width: double.infinity,
+                child: Stack(
+                  children: [
+                    Container(
+                      width: double.infinity,
+                      height: heroHeight,
+                      decoration: const BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [
+                            Color(0xFFF8FBFF),
+                            Color(0xFFEAF3FF),
+                          ],
+                        ),
+                      ),
+                    ),
+
+                    Positioned(
+                      right: -70,
+                      top: 35,
+                      child: Container(
+                        width: 260,
+                        height: 260,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: const Color(0xFF1976D2).withValues(alpha: .07),
+                        ),
+                      ),
+                    ),
+
+                    Positioned(
+                      right: 35,
+                      bottom: 85,
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          _building(42, 130),
+                          const SizedBox(width: 8),
+                          _building(55, 180),
+                          const SizedBox(width: 8),
+                          _building(38, 105),
+                        ],
+                      ),
+                    ),
+
+                    Positioned(
+                      right: 18,
+                      bottom: 50,
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.local_shipping_rounded,
+                            size: 72,
+                            color: AppTheme.navy.withValues(alpha: .18),
+                          ),
+                          const SizedBox(width: 4),
+                          Icon(
+                            Icons.construction_rounded,
+                            size: 82,
+                            color: AppTheme.blue.withValues(alpha: .20),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    Positioned(
+                      left: 28,
+                      top: 38,
+                      right: 28,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              Container(
+                                width: 82,
+                                height: 82,
+                                padding: const EdgeInsets.all(3),
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(20),
+                                  boxShadow: const [
+                                    BoxShadow(
+                                      color: Color(0x22000000),
+                                      blurRadius: 18,
+                                      offset: Offset(0, 8),
+                                    ),
+                                  ],
+                                ),
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(17),
+                                  child: Image.asset(
+                                    'assets/assetflow_logo.png',
+                                    fit: BoxFit.contain,
+                                  ),
+                                ),
+                              ),
+
+                              const SizedBox(width: 18),
+
+                              const Expanded(
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'AssetFlow',
+                                      style: TextStyle(
+                                        fontSize: 38,
+                                        fontWeight: FontWeight.w900,
+                                        letterSpacing: -1.2,
+                                        color: Color(0xFF0D2B55),
+                                      ),
+                                    ),
+                                    SizedBox(height: 2),
+                                    Text(
+                                      'MANAGE • TRACK • GROW',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        letterSpacing: 2.5,
+                                        fontWeight: FontWeight.w700,
+                                        color: Color(0xFF183C69),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+
+                          const SizedBox(height: 30),
+
+                          const Text(
+                            'The smarter way to manage your',
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF172B4D),
+                            ),
+                          ),
+
+                          const SizedBox(height: 4),
+
+                          const Text(
+                            'assets, vehicles, equipment, and',
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF172B4D),
+                            ),
+                          ),
+
+                          const SizedBox(height: 4),
+
+                          const Text(
+                            'business operations.',
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF172B4D),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: -1,
+                      child: ClipPath(
+                        clipper: _HeroBottomClipper(),
+                        child: Container(
+                          height: 82,
+                          decoration: const BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: [
+                                Color(0xFF0C4A91),
+                                Color(0xFF1475D1),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }
+
+            Widget _building(double width, double height) {
+              return Container(
+                width: width,
+                height: height,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1B4E82).withValues(alpha: .10),
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(4),
+                  ),
+                ),
+                child: Column(
+                  children: List.generate(
+                    (height ~/ 22).clamp(1, 10),
+                    (_) => Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 4,
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                        children: List.generate(
+                          2,
+                          (_) => Container(
+                            width: 7,
+                            height: 8,
+                            color: const Color(0xFF1976D2)
+                                .withValues(alpha: .22),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            }
+
+            Widget _buildLoginCard() {
+              return Container(
+                margin: const EdgeInsets.symmetric(horizontal: 24),
+                padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(26),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x180B2A66),
+                      blurRadius: 30,
+                      offset: Offset(0, 12),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Center(
+                      child: Text(
+                        'Welcome Back',
+                        style: TextStyle(
+                          fontSize: 28,
+                          fontWeight: FontWeight.w900,
+                          color: Color(0xFF0D315F),
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 6),
+
+                    const Center(
+                      child: Text(
+                        'Sign in to continue to your account',
+                        style: TextStyle(
+                          fontSize: 15,
+                          color: Color(0xFF6B778C),
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 28),
+
+                    const Text(
+                      'Email Address',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF172B4D),
+                      ),
+                    ),
+
+                    const SizedBox(height: 9),
+
+                    _inputField(
+                      controller: _emailController,
+                      hint: 'Enter your email',
+                      icon: Icons.email_outlined,
+                      keyboardType: TextInputType.emailAddress,
+                      textInputAction: TextInputAction.next,
+                    ),
+
+                    const SizedBox(height: 20),
+
+                    const Text(
+                      'Password',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF172B4D),
+                      ),
+                    ),
+
+                    const SizedBox(height: 9),
+
+                    _inputField(
+                      controller: _passwordController,
+                      hint: 'Enter your password',
+                      icon: Icons.lock_outline_rounded,
+                      obscureText: _obscurePassword,
+                      textInputAction: TextInputAction.done,
+                      onSubmitted: (_) => _submit(),
+                      suffix: IconButton(
+                        onPressed: () {
+                          setState(() {
+                            _obscurePassword = !_obscurePassword;
+                          });
+                        },
+                        icon: Icon(
+                          _obscurePassword
+                              ? Icons.visibility_outlined
+                              : Icons.visibility_off_outlined,
+                          color: const Color(0xFF5C6B82),
+                        ),
+                      ),
+                    ),
+
+                    if (_error != null) ...[
+                      const SizedBox(height: 14),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFFF1F1),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.error_outline,
+                              color: Colors.redAccent,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                _error!,
+                                style: const TextStyle(
+                                  color: Colors.redAccent,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton(
+                        onPressed: () {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'Password recovery can be connected to the backend recovery endpoint.',
+                              ),
+                            ),
+                          );
+                        },
+                        child: const Text(
+                          'Forgot Password?',
+                          style: TextStyle(
+                            color: Color(0xFF1769AA),
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 4),
+
+                    SizedBox(
+                      width: double.infinity,
+                      height: 56,
+                      child: ElevatedButton(
+                        onPressed: _loading ? null : _submit,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF0E4F99),
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(13),
+                          ),
+                        ),
+                        child: _loading
+                            ? const SizedBox(
+                                width: 23,
+                                height: 23,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : const Text(
+                                'Sign In',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }
+
+            Widget _inputField({
+              required TextEditingController controller,
+              required String hint,
+              required IconData icon,
+              TextInputType? keyboardType,
+              TextInputAction? textInputAction,
+              bool obscureText = false,
+              Widget? suffix,
+              void Function(String)? onSubmitted,
+            }) {
+              return TextField(
+                controller: controller,
+                keyboardType: keyboardType,
+                textInputAction: textInputAction,
+                obscureText: obscureText,
+                onSubmitted: onSubmitted,
+                decoration: InputDecoration(
+                  hintText: hint,
+                  prefixIcon: Container(
+                    margin: const EdgeInsets.all(7),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF0F5FC),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(
+                      icon,
+                      color: const Color(0xFF1459A0),
+                    ),
+                  ),
+                  suffixIcon: suffix,
+                  filled: true,
+                  fillColor: Colors.white,
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 15,
+                    vertical: 16,
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(13),
+                    borderSide: const BorderSide(
+                      color: Color(0xFFD5DCE6),
+                    ),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(13),
+                    borderSide: const BorderSide(
+                      color: Color(0xFF1976D2),
+                      width: 1.6,
+                    ),
+                  ),
+                ),
+              );
+            }
+
+            Widget _buildSecurityMessage() {
+              return const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.verified_user_rounded,
+                    color: Color(0xFF155AA5),
+                    size: 22,
+                  ),
+                  SizedBox(width: 8),
+                  Text(
+                    'Your data is secure with AssetFlow',
+                    style: TextStyle(
+                      color: Color(0xFF66758A),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              );
+            }
+
+            @override
+            void dispose() {
+              _emailController.dispose();
+              _passwordController.dispose();
+              super.dispose();
+            }
+          }
+
+          class _HeroBottomClipper extends CustomClipper<Path> {
+            @override
+            Path getClip(Size size) {
+              final path = Path();
+
+              path.moveTo(0, size.height * .35);
+
+              path.quadraticBezierTo(
+                size.width * .20,
+                size.height * .95,
+                size.width * .52,
+                size.height * .58,
+              );
+
+              path.quadraticBezierTo(
+                size.width * .78,
+                size.height * .25,
+                size.width,
+                size.height * .10,
+              );
+
+              path.lineTo(size.width, size.height);
+              path.lineTo(0, size.height);
+              path.close();
+
+              return path;
+            }
+
+            @override
+            bool shouldReclip(
+              covariant CustomClipper<Path> oldClipper,
+            ) {
+              return false;
+            }
+          }
+          DART
+
+          echo "Login page source updated."
+
+      # ============================================================
+      # 6. FORMAT
+      # ============================================================
+      - name: Format login page
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          dart format lib/screens/auth/login_screen.dart
+
+      # ============================================================
+      # 7. DEPENDENCIES
+      # ============================================================
+      - name: Flutter clean
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: flutter clean
+
+      - name: Flutter pub get
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: flutter pub get
+
+      # ============================================================
+      # 8. VERIFY LOGO
+      # ============================================================
+      - name: Verify AssetFlow logo
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f assets/assetflow_logo.png
+
+          grep -q "assets/assetflow_logo.png" \
+            lib/screens/auth/login_screen.dart
+
+          echo "AssetFlow logo verified."
+
+      # ============================================================
+      # 9. ANALYZE
+      # ============================================================
+      - name: Flutter analyze
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          flutter analyze \
+            --no-fatal-infos \
+            --no-fatal-warnings
+
+      # ============================================================
+      # 10. BUILD RELEASE APK
+      # ============================================================
+      - name: Build AssetFlow APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          flutter build apk \
+            --release \
+            --dart-define=API_BASE_URL="$API_BASE_URL"
+
+      # ============================================================
+      # 11. VERIFY APK
+      # ============================================================
+      - name: Verify APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="build/app/outputs/flutter-apk/app-release.apk"
+
+          test -f "$APK"
+
+          SIZE=$(stat -c%s "$APK")
+
+          if [ "$SIZE" -lt 100000 ]; then
+            echo "ERROR: APK is unexpectedly small."
+            exit 1
+          fi
+
+          echo "=========================================="
+          echo "ASSETFLOW APK SUCCESSFULLY BUILT"
+          echo "=========================================="
+          ls -lh "$APK"
+
+      # ============================================================
+      # 12. UPLOAD APK
+      # ============================================================
+      - name: Upload AssetFlow APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AssetFlow-login-page-release
+          path: assetflow_mobile/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+
+      # ============================================================
+      # 13. COMMIT LOGIN PAGE CHANGE
+      # ============================================================
+      - name: Commit login page update
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add assetflow_mobile/lib/screens/auth/login_screen.dart
+
+          if git diff --cached --quiet; then
+            echo "No login page changes to commit."
+            exit 0
+          fi
+
+          git commit -m "Update AssetFlow professional login page"
+          git push origin HEAD:master
