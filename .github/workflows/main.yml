@@ -1,0 +1,58 @@
+name: AssetFlow - Find Database Configuration
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Inspect backend configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "======================================"
+          echo "BACKEND FILES"
+          echo "======================================"
+
+          find assetflow-backend -maxdepth 3 -type f \
+            \( -name "*.py" -o -name "*.env*" -o -name "*.example" -o -name "*.toml" \) \
+            | sort
+
+          echo ""
+          echo "======================================"
+          echo "DATABASE CONFIGURATION REFERENCES"
+          echo "======================================"
+
+          grep -RniE \
+            "DATABASE_URL|DATABASE_URI|POSTGRES|postgresql|create_engine|asyncpg|sqlalchemy" \
+            assetflow-backend \
+            --exclude-dir=.git \
+            --exclude="*.pyc" \
+            | head -300 || true
+
+          echo ""
+          echo "======================================"
+          echo "ENVIRONMENT FILES"
+          echo "======================================"
+
+          find assetflow-backend -type f \
+            \( -name ".env" -o -name ".env.*" -o -name "*.env" -o -name "*.example" \) \
+            -print
+
+          echo ""
+          echo "======================================"
+          echo "IMPORTANT"
+          echo "======================================"
+          echo "This workflow performs READ-ONLY repository inspection."
+          echo "It does NOT connect to the database."
+          echo "It does NOT print secret values."
+          echo "It does NOT modify any files."
