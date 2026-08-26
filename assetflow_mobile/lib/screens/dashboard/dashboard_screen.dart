@@ -63,8 +63,8 @@ class _HomeContent extends StatelessWidget {
     final machineVehicles = data.vehicles.where(_looksLikeMachine).toList();
     final roadVehicles = data.vehicles.where((v) => !_looksLikeMachine(v)).toList();
 
-    final machineValue = machineVehicles.fold<double>(0, (sum, v) => sum + (v.currentValue ?? v.purchasePrice ?? 0));
-    final roadVehicleValue = roadVehicles.fold<double>(0, (sum, v) => sum + (v.currentValue ?? v.purchasePrice ?? 0));
+    final machineValue = machineVehicles.fold<double>(0, (sum, v) => sum + (0));
+    final roadVehicleValue = roadVehicles.fold<double>(0, (sum, v) => sum + (0));
     final propertyValue = data.properties.fold<double>(0, (sum, p) => sum + p.monthlyRent * 12);
     final shopValue = data.products.fold<double>(0, (sum, p) => sum + p.stockValue);
     final projectValue = data.project?.totalInvestment ?? 0;
