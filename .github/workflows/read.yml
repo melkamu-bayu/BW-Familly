@@ -1,0 +1,237 @@
+name: AssetFlow - READ Current Assets
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  read-assets:
+    name: Read Existing Machine and Vehicle Assets
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify backend structure
+        run: |
+          set -euo pipefail
+
+          echo "Checking AssetFlow backend..."
+
+          test -f assetflow-backend/app/models/business.py
+          test -f assetflow-backend/app/api/v1/vehicles.py
+
+          echo "Backend structure OK."
+
+      - name: Check DATABASE_URL
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${DATABASE_URL:-}" ]; then
+            echo "ERROR: DATABASE_URL GitHub Secret is not configured."
+            echo ""
+            echo "Go to:"
+            echo "Repository -> Settings -> Secrets and variables -> Actions"
+            echo ""
+            echo "Create:"
+            echo "DATABASE_URL"
+            exit 1
+          fi
+
+          echo "DATABASE_URL is configured."
+
+      - name: Install PostgreSQL client
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: READ database structure
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          set -euo pipefail
+
+          echo "=============================================="
+          echo "DATABASE TABLES"
+          echo "=============================================="
+
+          psql "$DATABASE_URL" \
+            -v ON_ERROR_STOP=1 \
+            -c "\dt"
+
+      - name: READ all business categories
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          set -euo pipefail
+
+          echo "=============================================="
+          echo "BUSINESS CATEGORIES"
+          echo "=============================================="
+
+          psql "$DATABASE_URL" \
+            -v ON_ERROR_STOP=1 \
+            -c "
+              SELECT
+                  id,
+                  code,
+                  name
+              FROM business_categories
+              ORDER BY code;
+            "
+
+      - name: READ ALL existing business units
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          set -euo pipefail
+
+          echo "=============================================="
+          echo "ALL EXISTING BUSINESS UNITS"
+          echo "=============================================="
+
+          psql "$DATABASE_URL" \
+            -v ON_ERROR_STOP=1 \
+            -c "
+              SELECT
+                  bu.id,
+                  bu.name,
+                  bu.unit_type,
+                  bu.status,
+                  bu.category_id,
+                  bu.created_at
+              FROM business_units bu
+              WHERE bu.deleted_at IS NULL
+              ORDER BY bu.created_at, bu.name;
+            "
+
+      - name: READ ALL existing vehicles
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          set -euo pipefail
+
+          echo "=============================================="
+          echo "ALL EXISTING VEHICLE RECORDS"
+          echo "=============================================="
+
+          psql "$DATABASE_URL" \
+            -v ON_ERROR_STOP=1 \
+            -c "
+              SELECT
+                  bu.id AS business_unit_id,
+                  bu.name AS asset_name,
+                  bu.unit_type,
+                  bu.status AS business_status,
+                  v.plate_number,
+                  v.vehicle_type,
+                  v.manufacturer,
+                  v.model,
+                  v.year,
+                  v.purchase_date,
+                  v.purchase_price,
+                  v.current_value,
+                  v.driver_name,
+                  v.mileage,
+                  v.operating_hours,
+                  v.status AS vehicle_status
+              FROM business_units bu
+              JOIN vehicles v
+                ON v.business_unit_id = bu.id
+              WHERE bu.deleted_at IS NULL
+              ORDER BY bu.created_at, bu.name;
+            "
+
+      - name: READ current machine candidates
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          set -euo pipefail
+
+          echo "=============================================="
+          echo "CURRENT MACHINE / EQUIPMENT CANDIDATES"
+          echo "=============================================="
+
+          psql "$DATABASE_URL" \
+            -v ON_ERROR_STOP=1 \
+            -c "
+              SELECT
+                  bu.id AS business_unit_id,
+                  bu.name,
+                  bu.unit_type,
+                  v.plate_number,
+                  v.vehicle_type,
+                  v.manufacturer,
+                  v.model,
+                  v.status
+              FROM business_units bu
+              LEFT JOIN vehicles v
+                ON v.business_unit_id = bu.id
+              WHERE bu.deleted_at IS NULL
+                AND (
+                    bu.name ILIKE 'EX-%'
+                    OR COALESCE(v.vehicle_type, '') ILIKE '%machine%'
+                    OR COALESCE(v.vehicle_type, '') ILIKE '%excav%'
+                    OR COALESCE(bu.name, '') ILIKE '%machine%'
+                )
+              ORDER BY bu.created_at, bu.name;
+            "
+
+      - name: READ current vehicle candidates
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          set -euo pipefail
+
+          echo "=============================================="
+          echo "CURRENT ROAD VEHICLE CANDIDATES"
+          echo "=============================================="
+
+          psql "$DATABASE_URL" \
+            -v ON_ERROR_STOP=1 \
+            -c "
+              SELECT
+                  bu.id AS business_unit_id,
+                  bu.name,
+                  bu.unit_type,
+                  v.plate_number,
+                  v.vehicle_type,
+                  v.manufacturer,
+                  v.model,
+                  v.year,
+                  v.status
+              FROM business_units bu
+              JOIN vehicles v
+                ON v.business_unit_id = bu.id
+              WHERE bu.deleted_at IS NULL
+                AND bu.unit_type = 'vehicle'
+                AND (
+                    bu.name NOT ILIKE 'EX-%'
+                    OR COALESCE(v.vehicle_type, '') NOT ILIKE '%machine%'
+                )
+              ORDER BY bu.created_at, bu.name;
+            "
+
+      - name: READ-only verification
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          set -euo pipefail
+
+          echo "=============================================="
+          echo "READ-ONLY CHECK COMPLETE"
+          echo "=============================================="
+
+          echo "No INSERT"
+          echo "No UPDATE"
+          echo "No DELETE"
+
+          echo ""
+          echo "The database was NOT modified."
