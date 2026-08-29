@@ -1,0 +1,741 @@
+name: AssetFlow - Fix Home Page Slowness
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-verify:
+    name: Fix Home Loading and Verify
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ------------------------------------------------------------
+      # 1. VERIFY EXPECTED REPOSITORY STRUCTURE
+      # ------------------------------------------------------------
+
+      - name: Verify repository structure
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          required_files=(
+            "assetflow_mobile/pubspec.yaml"
+            "assetflow_mobile/analysis_options.yaml"
+            "assetflow_mobile/lib/state/data_providers.dart"
+            "assetflow_mobile/lib/screens/dashboard/dashboard_screen.dart"
+            "assetflow_mobile/lib/models/home_models.dart"
+            "assetflow_mobile/lib/core/api_client.dart"
+            "assetflow-backend/app/api/v1/dashboard.py"
+            "assetflow-backend/app/services/financial_calculator.py"
+          )
+
+          for file in "${required_files[@]}"; do
+            if [ ! -f "$file" ]; then
+              echo "ERROR: Required file not found: $file"
+              exit 1
+            fi
+          done
+
+          echo "Repository structure verified."
+
+      # ------------------------------------------------------------
+      # 2. CREATE BACKUPS
+      # ------------------------------------------------------------
+
+      - name: Create source backups
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p .performance-backup
+
+          cp assetflow_mobile/lib/state/data_providers.dart \
+             .performance-backup/data_providers.dart
+
+          cp assetflow_mobile/lib/screens/dashboard/dashboard_screen.dart \
+             .performance-backup/dashboard_screen.dart
+
+          cp assetflow_mobile/lib/core/api_client.dart \
+             .performance-backup/api_client.dart
+
+          cp assetflow-backend/app/api/v1/dashboard.py \
+             .performance-backup/dashboard.py
+
+          echo "Backups created."
+
+      # ------------------------------------------------------------
+      # 3. PATCH FLUTTER DATA PROVIDERS
+      # ------------------------------------------------------------
+
+      - name: Convert home provider to summary-first loading
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path(
+              "assetflow_mobile/lib/state/data_providers.dart"
+          )
+
+          text = path.read_text()
+
+          old_import = "import 'package:dio/dio.dart';\n"
+          if old_import not in text:
+              raise SystemExit(
+                  "ERROR: Expected dio import was not found."
+              )
+
+          text = text.replace(old_import, "", 1)
+
+          start_marker = (
+              "/// Composite provider used by the redesigned home dashboard."
+          )
+
+          end_marker = (
+              "final homeTrendProvider = "
+              "FutureProvider.autoDispose<TrendReport?>"
+          )
+
+          start = text.find(start_marker)
+          end = text.find(end_marker)
+
+          if start == -1:
+              raise SystemExit(
+                  "ERROR: Existing homeDashboardProvider block "
+                  "was not found."
+              )
+
+          if end == -1:
+              raise SystemExit(
+                  "ERROR: homeTrendProvider boundary was not found."
+              )
+
+          replacement = r'''/// Critical data for the home screen.
+///
+/// IMPORTANT:
+/// Only the financial summary blocks the initial home render.
+/// All other dashboard sections are loaded through their own
+/// Riverpod providers so a slow secondary API cannot delay
+/// the entire home screen.
+final homeDashboardProvider =
+    FutureProvider.autoDispose<DashboardSummary>((ref) async {
+  final response = await ApiClient.instance.requestWithRetry(
+    () => ApiClient.instance.dio.get('/dashboard/summary'),
+  );
+
+  return DashboardSummary.fromJson(
+    response.data as Map<String, dynamic>,
+  );
+});
+
+/// Recent transactions used by the home dashboard.
+///
+/// This is deliberately independent from homeDashboardProvider.
+/// The home screen can render before this request completes.
+final homeRecentTransactionsProvider =
+    FutureProvider.autoDispose<List<RecentTransaction>>((ref) async {
+  final api = ApiClient.instance;
+  final now = DateTime.now();
+
+  final from = now
+      .subtract(const Duration(days: 60))
+      .toIso8601String()
+      .split('T')
+      .first;
+
+  final to = now
+      .toIso8601String()
+      .split('T')
+      .first;
+
+  final responses = await Future.wait([
+    api.requestWithRetry(
+      () => api.dio.get(
+        '/revenue',
+        queryParameters: {
+          'date_from': from,
+          'date_to': to,
+          'page': 1,
+          'per_page': 10,
+        },
+      ),
+    ),
+    api.requestWithRetry(
+      () => api.dio.get(
+        '/expenses',
+        queryParameters: {
+          'date_from': from,
+          'date_to': to,
+          'page': 1,
+          'per_page': 10,
+        },
+      ),
+    ),
+  ]);
+
+  final items = <RecentTransaction>[];
+
+  final revenueRows =
+      (responses[0].data as List).cast<Map<String, dynamic>>();
+
+  final expenseRows =
+      (responses[1].data as List).cast<Map<String, dynamic>>();
+
+  for (final row in revenueRows) {
+    items.add(
+      RecentTransaction(
+        isIncome: true,
+        title:
+            (row['description'] as String?)?.trim().isNotEmpty == true
+                ? row['description'] as String
+                : 'Revenue',
+        subtitle:
+            row['category'] as String? ?? 'Income',
+        amount:
+            double.tryParse(row['amount'].toString()) ?? 0,
+        date: DateTime.tryParse(
+              row['created_at']?.toString() ??
+                  row['txn_date']?.toString() ??
+                  '',
+            ) ??
+            now,
+      ),
+    );
+  }
+
+  for (final row in expenseRows) {
+    items.add(
+      RecentTransaction(
+        isIncome: false,
+        title:
+            (row['description'] as String?)?.trim().isNotEmpty == true
+                ? row['description'] as String
+                : 'Expense',
+        subtitle:
+            row['category'] as String? ?? 'Expense',
+        amount:
+            double.tryParse(row['amount'].toString()) ?? 0,
+        date: DateTime.tryParse(
+              row['created_at']?.toString() ??
+                  row['txn_date']?.toString() ??
+                  '',
+            ) ??
+            now,
+      ),
+    );
+  }
+
+  items.sort((a, b) => b.date.compareTo(a.date));
+
+  return items.take(5).toList();
+});
+
+'''
+
+          text = text[:start] + replacement + text[end:]
+
+          path.write_text(text)
+
+          print(
+              "homeDashboardProvider successfully changed "
+              "to summary-first loading."
+          )
+
+      # ------------------------------------------------------------
+      # 4. PATCH DASHBOARD SCREEN
+      # ------------------------------------------------------------
+
+      - name: Make dashboard consume independent providers
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path(
+              "assetflow_mobile/lib/screens/dashboard/dashboard_screen.dart"
+          )
+
+          text = path.read_text()
+
+          old = '''class DashboardScreen extends ConsumerWidget {
+  const DashboardScreen({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final homeAsync = ref.watch(homeDashboardProvider);
+    final trendAsync = ref.watch(homeTrendProvider);
+    final user = ref.watch(authProvider).user;
+
+    return Scaffold(
+      body: SafeArea(
+        child: RefreshIndicator(
+          onRefresh: () async {
+            ref.invalidate(homeDashboardProvider);
+            ref.invalidate(homeTrendProvider);
+            await ref.read(homeDashboardProvider.future);
+          },
+          child: homeAsync.when(
+            loading: () => const _DashboardSkeleton(),
+            error: (error, _) => _DashboardError(
+              onRetry: () {
+                ref.invalidate(homeDashboardProvider);
+                ref.invalidate(homeTrendProvider);
+              },
+            ),
+            data: (data) => _HomeContent(
+              data: data,
+              trend: trendAsync.valueOrNull,
+              userName: user?.fullName.split(' ').first ?? 'there',
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}'''
+
+          new = '''class DashboardScreen extends ConsumerWidget {
+  const DashboardScreen({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final summaryAsync = ref.watch(homeDashboardProvider);
+    final trendAsync = ref.watch(homeTrendProvider);
+
+    final performanceAsync =
+        ref.watch(businessPerformanceProvider);
+
+    final vehiclesAsync =
+        ref.watch(vehiclesProvider);
+
+    final propertiesAsync =
+        ref.watch(propertiesProvider);
+
+    final productsAsync =
+        ref.watch(shopProductsProvider);
+
+    final projectAsync =
+        ref.watch(goldProjectDashboardProvider);
+
+    final shopAsync =
+        ref.watch(shopDashboardProvider);
+
+    final transactionsAsync =
+        ref.watch(homeRecentTransactionsProvider);
+
+    final notificationsAsync =
+        ref.watch(notificationsProvider);
+
+    final user = ref.watch(authProvider).user;
+
+    return Scaffold(
+      body: SafeArea(
+        child: RefreshIndicator(
+          onRefresh: () async {
+            ref.invalidate(homeDashboardProvider);
+            ref.invalidate(homeTrendProvider);
+            ref.invalidate(businessPerformanceProvider);
+            ref.invalidate(vehiclesProvider);
+            ref.invalidate(propertiesProvider);
+            ref.invalidate(shopProductsProvider);
+            ref.invalidate(goldProjectDashboardProvider);
+            ref.invalidate(shopDashboardProvider);
+            ref.invalidate(homeRecentTransactionsProvider);
+            ref.invalidate(notificationsProvider);
+
+            await ref.read(homeDashboardProvider.future);
+          },
+          child: summaryAsync.when(
+            loading: () => const _DashboardSkeleton(),
+            error: (error, _) => _DashboardError(
+              onRetry: () {
+                ref.invalidate(homeDashboardProvider);
+                ref.invalidate(homeTrendProvider);
+                ref.invalidate(businessPerformanceProvider);
+                ref.invalidate(vehiclesProvider);
+                ref.invalidate(propertiesProvider);
+                ref.invalidate(shopProductsProvider);
+                ref.invalidate(goldProjectDashboardProvider);
+                ref.invalidate(shopDashboardProvider);
+                ref.invalidate(homeRecentTransactionsProvider);
+                ref.invalidate(notificationsProvider);
+              },
+            ),
+            data: (summary) {
+              final data = HomeDashboardData(
+                summary: summary,
+                performance:
+                    performanceAsync.valueOrNull ?? const [],
+                vehicles:
+                    vehiclesAsync.valueOrNull ?? const [],
+                properties:
+                    propertiesAsync.valueOrNull ?? const [],
+                products:
+                    productsAsync.valueOrNull ?? const [],
+                project:
+                    projectAsync.valueOrNull,
+                shop:
+                    shopAsync.valueOrNull,
+                transactions:
+                    transactionsAsync.valueOrNull ?? const [],
+                unreadNotifications:
+                    notificationsAsync.valueOrNull
+                            ?.where((n) => !n.isRead)
+                            .length ??
+                        0,
+              );
+
+              return _HomeContent(
+                data: data,
+                trend: trendAsync.valueOrNull,
+                userName:
+                    user?.fullName.split(' ').first ?? 'there',
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}'''
+
+          if old not in text:
+              raise SystemExit(
+                  "ERROR: Expected DashboardScreen build block "
+                  "was not found exactly. No modification made."
+              )
+
+          text = text.replace(old, new, 1)
+
+          path.write_text(text)
+
+          print(
+              "DashboardScreen changed to progressive provider loading."
+          )
+
+      # ------------------------------------------------------------
+      # 5. VERIFY NOTIFICATION MODEL FIELD
+      # ------------------------------------------------------------
+
+      - name: Verify notification model compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if ! grep -R "bool isRead" \
+              assetflow_mobile/lib/models \
+              >/dev/null 2>&1; then
+
+            if ! grep -R "isRead" \
+                assetflow_mobile/lib/models \
+                >/dev/null 2>&1; then
+
+              echo "ERROR: Could not verify AppNotification.isRead."
+              echo "Stopping before commit."
+              exit 1
+            fi
+          fi
+
+          echo "Notification read-state field verified."
+
+      # ------------------------------------------------------------
+      # 6. OPTIMIZE API RETRIES/TIMEOUTS
+      # ------------------------------------------------------------
+
+      - name: Reduce dashboard retry delay
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path(
+              "assetflow_mobile/lib/core/api_client.dart"
+          )
+
+          text = path.read_text()
+
+          replacements = {
+              "connectTimeout: const Duration(seconds: 12),":
+                  "connectTimeout: const Duration(seconds: 8),",
+              "sendTimeout: const Duration(seconds: 12),":
+                  "sendTimeout: const Duration(seconds: 10),",
+              "receiveTimeout: const Duration(seconds: 20),":
+                  "receiveTimeout: const Duration(seconds: 12),",
+              "int maxAttempts = 3,":
+                  "int maxAttempts = 2,",
+          }
+
+          for old, new in replacements.items():
+              if old not in text:
+                  raise SystemExit(
+                      f"ERROR: Expected API setting not found: {old}"
+                  )
+
+              text = text.replace(old, new, 1)
+
+          path.write_text(text)
+
+          print("API timeout/retry configuration optimized.")
+
+      # ------------------------------------------------------------
+      # 7. OPTIMIZE BACKEND SUMMARY DUPLICATE QUERIES
+      # ------------------------------------------------------------
+
+      - name: Optimize dashboard summary calculations
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path(
+              "assetflow-backend/app/api/v1/dashboard.py"
+          )
+
+          text = path.read_text()
+
+          old = '''    return {
+        "today": {
+            "revenue": total_revenue(db, date_from=today, date_to=today),
+            "expense": total_expense(db, date_from=today, date_to=today),
+            "net_profit": net_profit(db, date_from=today, date_to=today),
+        },
+        "this_month": {
+            "revenue": total_revenue(db, date_from=month_start, date_to=today),
+            "expense": total_expense(db, date_from=month_start, date_to=today),
+            "net_profit": net_profit(db, date_from=month_start, date_to=today),
+        },
+        "all_time": {
+            "revenue": total_revenue(db),
+            "expense": total_expense(db),
+            "net_profit": net_profit(db),
+        },
+        "cash_and_bank_balance": cash_bank_total,
+        "currency": "ETB",
+    }'''
+
+          new = '''    today_revenue = total_revenue(
+        db,
+        date_from=today,
+        date_to=today,
+    )
+    today_expense = total_expense(
+        db,
+        date_from=today,
+        date_to=today,
+    )
+
+    month_revenue = total_revenue(
+        db,
+        date_from=month_start,
+        date_to=today,
+    )
+    month_expense = total_expense(
+        db,
+        date_from=month_start,
+        date_to=today,
+    )
+
+    all_time_revenue = total_revenue(db)
+    all_time_expense = total_expense(db)
+
+    return {
+        "today": {
+            "revenue": today_revenue,
+            "expense": today_expense,
+            "net_profit": today_revenue - today_expense,
+        },
+        "this_month": {
+            "revenue": month_revenue,
+            "expense": month_expense,
+            "net_profit": month_revenue - month_expense,
+        },
+        "all_time": {
+            "revenue": all_time_revenue,
+            "expense": all_time_expense,
+            "net_profit": all_time_revenue - all_time_expense,
+        },
+        "cash_and_bank_balance": cash_bank_total,
+        "currency": "ETB",
+    }'''
+
+          if old not in text:
+              raise SystemExit(
+                  "ERROR: Expected dashboard summary return block "
+                  "was not found. Backend was not modified."
+              )
+
+          text = text.replace(old, new, 1)
+
+          path.write_text(text)
+
+          print("Backend summary calculations optimized.")
+
+      # ------------------------------------------------------------
+      # 8. SETUP FLUTTER
+      # ------------------------------------------------------------
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Show tool versions
+        run: |
+          flutter --version
+          dart --version
+          java -version
+
+      # ------------------------------------------------------------
+      # 9. GET DEPENDENCIES
+      # ------------------------------------------------------------
+
+      - name: Flutter pub get
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+          flutter pub get
+
+      # ------------------------------------------------------------
+      # 10. FORMAT
+      # ------------------------------------------------------------
+
+      - name: Format Dart source
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+          dart format lib
+
+      # ------------------------------------------------------------
+      # 11. FLUTTER ANALYZER
+      # ------------------------------------------------------------
+
+      - name: Flutter analyze
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+          flutter analyze
+
+      # ------------------------------------------------------------
+      # 12. TESTS
+      # ------------------------------------------------------------
+
+      - name: Flutter tests
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          if [ -d test ]; then
+            flutter test
+          else
+            echo "No Flutter test directory found."
+          fi
+
+      # ------------------------------------------------------------
+      # 13. BACKEND PYTHON VALIDATION
+      # ------------------------------------------------------------
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install backend dependencies
+        working-directory: assetflow-backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Compile backend
+        run: |
+          python -m compileall \
+            assetflow-backend/app
+
+      - name: Verify modified backend files
+        run: |
+          python -m py_compile \
+            assetflow-backend/app/api/v1/dashboard.py \
+            assetflow-backend/app/services/financial_calculator.py
+
+      # ------------------------------------------------------------
+      # 14. BUILD PRODUCTION APK
+      # ------------------------------------------------------------
+
+      - name: Build release APK
+        working-directory: assetflow_mobile
+        run: |
+          set -euo pipefail
+
+          flutter build apk \
+            --release \
+            --dart-define=API_BASE_URL=https://assetflow-api-f435.onrender.com/api/v1
+
+      # ------------------------------------------------------------
+      # 15. SHOW FINAL DIFF
+      # ------------------------------------------------------------
+
+      - name: Review final changes
+        run: |
+          set -euo pipefail
+
+          echo "=============================="
+          echo "CHANGED FILES"
+          echo "=============================="
+
+          git status --short
+
+          echo "=============================="
+          echo "DIFF STAT"
+          echo "=============================="
+
+          git diff --stat
+
+      # ------------------------------------------------------------
+      # 16. COMMIT ONLY AFTER ALL CHECKS PASS
+      # ------------------------------------------------------------
+
+      - name: Commit verified performance fix
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add \
+            assetflow_mobile/lib/state/data_providers.dart \
+            assetflow_mobile/lib/screens/dashboard/dashboard_screen.dart \
+            assetflow_mobile/lib/core/api_client.dart \
+            assetflow-backend/app/api/v1/dashboard.py
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit \
+            -m "Fix slow home dashboard loading"
+
+          git push
+
+      # ------------------------------------------------------------
+      # 17. UPLOAD APK
+      # ------------------------------------------------------------
+
+      - name: Upload production APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AssetFlow-Home-Performance-Fixed
+          path: assetflow_mobile/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
