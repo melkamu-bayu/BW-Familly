@@ -15,16 +15,36 @@ from app.core.database import SessionLocal, engine, Base
 from app.core.security import hash_password
 from app.models.identity import Role, Permission, User
 from app.models.business import BusinessCategory, BusinessUnit, Vehicle, Property, Project
-from app.models.financial import Account
+from app.models.financial import Account, RevenueTransaction, ExpenseTransaction, MaintenanceRecord
 
-VEHICLE_NAMES = [
+# Machines are heavy equipment (excavators etc.) -- structurally identical to
+# Vehicles (same `vehicles` table/model: plate/asset number, mileage, status,
+# financials), but tracked as a distinct business category so they show up
+# separately everywhere (API filtering via ?category=, dashboard tiles,
+# asset lists) instead of being lumped in with road vehicles.
+MACHINE_NAMES = [
     "EX-3952",
     "EX-4541",
+]
+VEHICLE_NAMES = [
+    "A28405/01001",
     "A26401/15598",
     "A19876/35760",
-    "A28405/01001",
     "Land-Cruiser",
+    "Apache-Motor",
 ]
+
+# These three were seeded under earlier, incorrect names (a mix of typos and
+# two concatenated asset numbers run together as one). seed() only ever
+# *creates* missing rows, so simply removing them from the lists above would
+# leave the wrong rows sitting in an already-seeded database forever --
+# _remove_incorrect_business_units() below deletes them explicitly, once.
+INCORRECT_UNIT_NAMES = [
+    "EX-454",
+    "EX-3952A28405/0100",
+    "Land-Cruiser-Car",
+]
+
 HOUSE_NAMES = ["Kush-House", "Kosober-House"]
 
 DOMAIN_RESOURCES = ["vehicles", "properties", "shop", "projects"]
@@ -58,6 +78,29 @@ ROLE_PERMISSIONS = {
         *[(r, "read") for r in DOMAIN_RESOURCES],
     ],
 }
+
+
+def _remove_incorrect_business_units(db: Session, names: list[str]) -> None:
+    """
+    Deletes BusinessUnit rows (and everything that references them) for the
+    given names, if they still exist. Runs on every seed(), so it's a no-op
+    once the rows are actually gone -- safe to leave in permanently rather
+    than remembering to remove it after the next deploy.
+
+    Deletes dependents first (revenue/expense transactions, maintenance
+    records, the vehicle row itself) before the business_unit row, since the
+    database enforces foreign keys and would otherwise reject the delete.
+    """
+    units = db.query(BusinessUnit).filter(BusinessUnit.name.in_(names)).all()
+    for unit in units:
+        db.query(RevenueTransaction).filter(RevenueTransaction.business_unit_id == unit.id).delete()
+        db.query(ExpenseTransaction).filter(ExpenseTransaction.business_unit_id == unit.id).delete()
+        db.query(MaintenanceRecord).filter(MaintenanceRecord.business_unit_id == unit.id).delete()
+        db.query(Vehicle).filter(Vehicle.business_unit_id == unit.id).delete()
+        db.delete(unit)
+    if units:
+        db.flush()
+        print(f"Removed {len(units)} incorrect legacy record(s): {[u.name for u in units]}")
 
 
 def seed(db: Session) -> None:
@@ -113,6 +156,7 @@ def seed(db: Session) -> None:
     categories = {}
     for code, name in [
         ("VEHICLES", "Vehicles"),
+        ("MACHINES", "Machines"),
         ("RENTAL_HOUSES", "Houses"),
         ("SHOP", "Shops"),
         ("PROJECT", "Projects"),
@@ -124,11 +168,23 @@ def seed(db: Session) -> None:
             db.flush()
         categories[code] = cat
 
+    # --- Remove incorrect legacy records (see INCORRECT_UNIT_NAMES above) ---
+    _remove_incorrect_business_units(db, INCORRECT_UNIT_NAMES)
+
     # --- Vehicles (Section 31) ---
     for name in VEHICLE_NAMES:
         unit = db.query(BusinessUnit).filter(BusinessUnit.name == name, BusinessUnit.unit_type == "vehicle").one_or_none()
         if unit is None:
             unit = BusinessUnit(category_id=categories["VEHICLES"].id, unit_type="vehicle", name=name)
+            db.add(unit)
+            db.flush()
+            db.add(Vehicle(business_unit_id=unit.id, status="active"))
+
+    # --- Machines (heavy equipment, separate category from Vehicles) ---
+    for name in MACHINE_NAMES:
+        unit = db.query(BusinessUnit).filter(BusinessUnit.name == name, BusinessUnit.unit_type == "vehicle").one_or_none()
+        if unit is None:
+            unit = BusinessUnit(category_id=categories["MACHINES"].id, unit_type="vehicle", name=name)
             db.add(unit)
             db.flush()
             db.add(Vehicle(business_unit_id=unit.id, status="active"))
