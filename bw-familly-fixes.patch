@@ -1,0 +1,2075 @@
+diff --git a/.github/workflows/apk-build.yml b/.github/workflows/apk-build.yml
+index 8c53ff3..bbd1758 100644
+--- a/.github/workflows/apk-build.yml
++++ b/.github/workflows/apk-build.yml
+@@ -216,130 +216,27 @@ jobs:
+           echo "Internet permission OK."
+ 
+       # ============================================================
+-      # 8. VERIFY BACKEND
++      # 8. CHECK BACKEND (non-blocking)
+       # ============================================================
+       - name: Check production API
+         shell: bash
+         run: |
+-          set -euo pipefail
+-
++          # Informational only. Render's free tier spins the API down when idle and
++          # a cold start can take a minute or more; an APK build must not fail
++          # just because the backend was asleep. The first request wakes it.
+           DOCS_URL="https://assetflow-api-f435.onrender.com/docs"
+-
+-          echo "Checking:"
+-          echo "$DOCS_URL"
+-
+-          HTTP_CODE=$(curl \
+-            --location \
+-            --silent \
+-            --show-error \
+-            --output /dev/null \
+-            --write-out "%{http_code}" \
+-            --connect-timeout 20 \
+-            --max-time 60 \
+-            "$DOCS_URL")
+-
+-          echo "HTTP status: $HTTP_CODE"
+-
++          for attempt in 1 2 3; do
++            HTTP_CODE=$(curl --location --silent --output /dev/null \
++              --write-out "%{http_code}" --connect-timeout 20 --max-time 90 \
++              "$DOCS_URL" || true)
++            echo "Attempt $attempt: HTTP $HTTP_CODE"
++            [ "$HTTP_CODE" = "200" ] && break
++            sleep 10
++          done
+           if [ "$HTTP_CODE" != "200" ]; then
+-            echo "ERROR: Production backend is not reachable."
+-            exit 1
++            echo "::warning::Production API did not return 200 (got $HTTP_CODE). Building the APK anyway."
+           fi
+ 
+-          echo "Production backend is reachable."
+-
+-      # ============================================================
+-      # 9. FORCE PRODUCTION API CONFIGURATION
+-      # ============================================================
+-      - name: Configure production API
+-        working-directory: assetflow_mobile
+-        shell: bash
+-        run: |
+-          set -euo pipefail
+-
+-          mkdir -p lib/core
+-
+-          cat > lib/core/config.dart <<'DART'
+-          class AppConfig {
+-            AppConfig._();
+-
+-            static const String apiBaseUrl = String.fromEnvironment(
+-              'API_BASE_URL',
+-              defaultValue:
+-                  'https://assetflow-api-f435.onrender.com/api/v1',
+-            );
+-
+-            static const String defaultCurrency = 'ETB';
+-
+-            static const Duration idleLockTimeout =
+-                Duration(minutes: 15);
+-          }
+-          DART
+-
+-          echo "Production API configuration created."
+-
+-          cat lib/core/config.dart
+-
+-      # ============================================================
+-      # 10. FIX NEW UI COMPATIBILITY ISSUES
+-      # ============================================================
+-      - name: Fix new UI Dart compatibility
+-        working-directory: assetflow_mobile
+-        shell: bash
+-        run: |
+-          set -euo pipefail
+-
+-          python3 - <<'PY'
+-          from pathlib import Path
+-
+-          router = Path("lib/router.dart")
+-
+-          if router.exists():
+-              text = router.read_text()
+-
+-              text = text.replace(
+-                  "=> const LoginScreen()",
+-                  "=> LoginScreen()"
+-              )
+-
+-              router.write_text(text)
+-
+-              print("router.dart checked/fixed.")
+-
+-          dashboard = Path(
+-              "lib/screens/dashboard/dashboard_screen.dart"
+-          )
+-
+-          if dashboard.exists():
+-              text = dashboard.read_text()
+-
+-              replacements = [
+-                  "machineVehicles.fold<double>(0, (sum, v) => sum + (v.currentValue ?? v.purchasePrice ?? 0))",
+-                  "roadVehicles.fold<double>(0, (sum, v) => sum + (v.currentValue ?? v.purchasePrice ?? 0))",
+-                  "vehicles.fold<double>(0, (sum, v) => sum + (v.currentValue ?? v.purchasePrice ?? 0))",
+-                  "vehicle.currentValue - vehicle.purchasePrice",
+-                  "vehicle.currentValue",
+-                  "vehicle.purchasePrice",
+-                  "vehicles[index].currentValue - vehicles[index].purchasePrice",
+-                  "vehicles[index].currentValue",
+-                  "vehicles[index].purchasePrice",
+-              ]
+-
+-              for old in replacements:
+-                  text = text.replace(old, "0.0")
+-
+-              dashboard.write_text(text)
+-
+-              print("dashboard_screen.dart checked/fixed.")
+-
+-          widget_test = Path("test/widget_test.dart")
+-
+-          if widget_test.exists():
+-              widget_test.unlink()
+-              print("Removed obsolete widget_test.dart.")
+-          PY
+-
+-          echo "Dart compatibility fixes completed."
+-
+       # ============================================================
+       # 11. FLUTTER CLEAN
+       # ============================================================
+diff --git a/README.md b/README.md
+index d000dc0..6d00f35 100644
+--- a/README.md
++++ b/README.md
+@@ -18,11 +18,10 @@ Two projects, meant to be deployed and run together:
+ 3. Build the mobile app against that backend's URL:
+    ```bash
+    cd assetflow_mobile
+-   flutter create .
+    flutter pub get
+    flutter analyze
+-   ./scripts/build_android.sh   # or set API_BASE_URL and run manually
++   flutter build apk --release --dart-define=API_BASE_URL=https://<your-backend>/api/v1
+    ```
+ 
+-Seeded login once the backend is up: `admin@assetflow.local` / `ChangeMe123!`
++Seeded login once the backend is up: `admin@assetflow.app` / `ChangeMe123!`
+ — change this before using the app for anything real.
+diff --git a/assetflow-backend/README.md b/assetflow-backend/README.md
+index 06723ac..28e025f 100644
+--- a/assetflow-backend/README.md
++++ b/assetflow-backend/README.md
+@@ -95,3 +95,14 @@ curl -X POST localhost:8000/api/v1/auth/login \
+ # 2. Use the access_token from the response as a Bearer token to, e.g., list accounts
+ curl localhost:8000/api/v1/accounts -H "Authorization: Bearer <access_token>"
+ ```
++
++## Tests
++
++Integration tests need a throwaway PostgreSQL database (the models use Postgres-only types):
++
++```bash
++pip install -r requirements-dev.txt
++export DATABASE_URL=postgresql+psycopg2://assetflow:assetflow@localhost:5432/assetflow_test
++alembic upgrade head && python -m app.seed
++pytest
++```
+diff --git a/assetflow-backend/app/api/v1/auth.py b/assetflow-backend/app/api/v1/auth.py
+index 6988b4a..af441c5 100644
+--- a/assetflow-backend/app/api/v1/auth.py
++++ b/assetflow-backend/app/api/v1/auth.py
+@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
+ from fastapi.security import OAuth2PasswordRequestForm
+ from fastapi import APIRouter, Depends, HTTPException, status
+ from jose import JWTError
+-from sqlalchemy import select
++from sqlalchemy import select, func
+ from sqlalchemy.orm import Session
+ 
+ from app.core.config import settings
+@@ -30,7 +30,9 @@ router = APIRouter(prefix="/auth", tags=["auth"])
+ 
+ @router.post("/login", response_model=TokenResponse)
+ def login(payload: LoginRequest, db: Session = Depends(get_db)):
+-    user = db.execute(select(User).where(User.email == payload.email)).scalar_one_or_none()
++    user = db.execute(
++        select(User).where(func.lower(User.email) == payload.email.strip().lower())
++    ).scalar_one_or_none()
+     if user is None or user.deleted_at is not None or not user.active:
+         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+     if not verify_password(payload.password, user.password_hash):
+@@ -67,7 +69,8 @@ def refresh(payload: RefreshRequest, db: Session = Depends(get_db)):
+             raise HTTPException(status_code=401, detail="Invalid token type")
+         user_id = decoded["sub"]
+         jti = decoded["jti"]
+-    except JWTError:
++        uuid.UUID(user_id)
++    except (JWTError, KeyError, ValueError):
+         raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
+ 
+     stored = db.execute(select(RefreshToken).where(RefreshToken.jti == jti)).scalar_one_or_none()
+diff --git a/assetflow-backend/app/api/v1/dashboard.py b/assetflow-backend/app/api/v1/dashboard.py
+index 8301d54..6198556 100644
+--- a/assetflow-backend/app/api/v1/dashboard.py
++++ b/assetflow-backend/app/api/v1/dashboard.py
+@@ -9,6 +9,7 @@ from app.core.dependencies import require_permission
+ from app.models.identity import User
+ from app.models.financial import Account, RevenueTransaction, ExpenseTransaction
+ from app.models.business import BusinessUnit, BusinessCategory
++from app.core.config import settings
+ from app.services.financial_calculator import total_revenue, total_expense, net_profit
+ 
+ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
+@@ -43,7 +44,7 @@ def financial_summary(
+             "net_profit": net_profit(db),
+         },
+         "cash_and_bank_balance": cash_bank_total,
+-        "currency": "ETB",
++        "currency": settings.DEFAULT_CURRENCY,
+     }
+ 
+ 
+@@ -63,7 +64,7 @@ def business_performance(
+     ensures a category with units but zero transactions yet still comes back
+     as revenue=0 rather than being silently dropped from the result.
+     """
+-    overall_profit = net_profit(db) or 1  # avoid div-by-zero; guarded below
++    overall_profit = net_profit(db)
+ 
+     revenue_by_category = dict(
+         db.execute(
+@@ -98,6 +99,7 @@ def business_performance(
+         cat_revenue = float(revenue_by_category.get(category.id, 0))
+         cat_expense = float(expense_by_category.get(category.id, 0))
+         cat_profit = cat_revenue - cat_expense
++        # No meaningful share exists when overall profit is exactly zero.
+         contribution_pct = (cat_profit / overall_profit * 100) if overall_profit else 0
+ 
+         results.append(
+diff --git a/assetflow-backend/app/api/v1/expenses.py b/assetflow-backend/app/api/v1/expenses.py
+index 05f446c..97f2884 100644
+--- a/assetflow-backend/app/api/v1/expenses.py
++++ b/assetflow-backend/app/api/v1/expenses.py
+@@ -13,6 +13,7 @@ from app.schemas.financial import ExpenseCreate, ExpenseOut
+ from app.services.transaction_code import generate_transaction_code
+ from app.services.audit_service import log_action
+ from app.services.financial_calculator import recompute_account_balance
++from app.services.lookups import require_account, require_business_unit
+ 
+ router = APIRouter(prefix="/expenses", tags=["expenses"])
+ 
+@@ -29,6 +30,9 @@ def create_expense(
+     if existing is not None:
+         return existing
+ 
++    require_business_unit(db, payload.business_unit_id)
++    require_account(db, payload.account_id)
++
+     code = generate_transaction_code(
+         db, prefix="EXP", table_name="expense_transactions", code_column=ExpenseTransaction.transaction_code
+     )
+diff --git a/assetflow-backend/app/api/v1/projects.py b/assetflow-backend/app/api/v1/projects.py
+index d20d3a5..7e27f56 100644
+--- a/assetflow-backend/app/api/v1/projects.py
++++ b/assetflow-backend/app/api/v1/projects.py
+@@ -1,5 +1,3 @@
+-import uuid
+-
+ from fastapi import APIRouter, Depends, HTTPException
+ from sqlalchemy import select
+ 
+@@ -17,6 +15,7 @@ from app.schemas.project import (
+     ProjectDashboard,
+ )
+ from app.services.audit_service import log_action
++from app.services.lookups import require_account
+ from app.services.transaction_code import generate_transaction_code
+ from app.services.financial_calculator import recompute_account_balance, project_roi
+ 
+@@ -82,6 +81,8 @@ def add_project_transaction(
+       consolidated P&L stay in sync automatically (Section 13).
+     """
+     project = _get_project(db)
++    if payload.account_id is not None:
++        require_account(db, payload.account_id)
+ 
+     txn = ProjectTransaction(
+         project_id=project.id,
+diff --git a/assetflow-backend/app/api/v1/properties.py b/assetflow-backend/app/api/v1/properties.py
+index 3018d98..b3ee90b 100644
+--- a/assetflow-backend/app/api/v1/properties.py
++++ b/assetflow-backend/app/api/v1/properties.py
+@@ -9,7 +9,7 @@ from app.core.database import get_db
+ from app.core.dependencies import require_permission
+ from app.models.identity import User
+ from app.models.business import BusinessUnit, Property, Tenant, BusinessCategory
+-from app.models.financial import RentalTransaction
++from app.models.financial import RentalTransaction, RevenueTransaction
+ from app.schemas.property import (
+     PropertyCreate,
+     PropertyUpdate,
+@@ -21,6 +21,7 @@ from app.schemas.property import (
+     PropertyDashboard,
+ )
+ from app.services.audit_service import log_action
++from app.services.lookups import require_account
+ from app.services.financial_calculator import total_expense, outstanding_rent
+ 
+ router = APIRouter(prefix="/properties", tags=["properties"])
+@@ -178,13 +179,25 @@ def collect_rent(
+     if prop is None:
+         raise HTTPException(status_code=404, detail="Property not found")
+ 
++    require_account(db, payload.account_id)
++    period = payload.period_month.replace(day=1)
++
+     existing_rt = db.execute(
+         select(RentalTransaction).where(
+             RentalTransaction.property_id == property_id,
+-            RentalTransaction.period_month == payload.period_month.replace(day=1),
++            RentalTransaction.period_month == period,
+         )
+     ).scalar_one_or_none()
+ 
++    # Idempotency check BEFORE touching amount_paid: a retried request (e.g. an
++    # offline queue replay after a dropped response) carries the same key and
++    # must not add the payment to the period a second time.
++    already_posted = db.execute(
++        select(RevenueTransaction).where(RevenueTransaction.idempotency_key == payload.idempotency_key)
++    ).scalar_one_or_none()
++    if already_posted is not None and existing_rt is not None:
++        return existing_rt
++
+     if existing_rt is None:
+         rt = RentalTransaction(
+             property_id=property_id,
+@@ -208,28 +221,23 @@ def collect_rent(
+     db.flush()
+ 
+     # Post as revenue so it flows through the shared financial pipeline (account balance, P&L).
+-    from app.models.financial import RevenueTransaction
+     from app.services.transaction_code import generate_transaction_code
+     from app.services.financial_calculator import recompute_account_balance
+ 
+-    code = generate_transaction_code(db, prefix="REV", table_name="revenue_transactions",
+-                                      code_column=RevenueTransaction.transaction_code)
+-    revenue_txn = RevenueTransaction(
+-        transaction_code=code,
+-        business_unit_id=prop.business_unit_id,
+-        account_id=payload.account_id,
+-        category="monthly_rent",
+-        description=f"Rent for {payload.period_month.strftime('%Y-%m')}",
+-        amount=payload.amount_paid,
+-        txn_date=date.today(),
+-        idempotency_key=payload.idempotency_key,
+-        created_by=current_user.id,
+-    )
+-    existing = db.execute(
+-        select(RevenueTransaction).where(RevenueTransaction.idempotency_key == payload.idempotency_key)
+-    ).scalar_one_or_none()
+-    if existing is None:
+-        db.add(revenue_txn)
++    if already_posted is None:
++        code = generate_transaction_code(db, prefix="REV", table_name="revenue_transactions",
++                                          code_column=RevenueTransaction.transaction_code)
++        db.add(RevenueTransaction(
++            transaction_code=code,
++            business_unit_id=prop.business_unit_id,
++            account_id=payload.account_id,
++            category="monthly_rent",
++            description=f"Rent for {payload.period_month.strftime('%Y-%m')}",
++            amount=payload.amount_paid,
++            txn_date=date.today(),
++            idempotency_key=payload.idempotency_key,
++            created_by=current_user.id,
++        ))
+         db.flush()
+         recompute_account_balance(db, payload.account_id)
+ 
+diff --git a/assetflow-backend/app/api/v1/reports.py b/assetflow-backend/app/api/v1/reports.py
+index 9177946..cd54c3a 100644
+--- a/assetflow-backend/app/api/v1/reports.py
++++ b/assetflow-backend/app/api/v1/reports.py
+@@ -2,9 +2,9 @@ import io
+ from collections import defaultdict
+ from datetime import date
+ 
+-from fastapi import APIRouter, Depends, HTTPException, Query
++from fastapi import APIRouter, Depends, Query
+ from fastapi.responses import StreamingResponse
+-from sqlalchemy import select, func
++from sqlalchemy import select
+ from sqlalchemy.orm import Session
+ 
+ from app.core.database import get_db
+diff --git a/assetflow-backend/app/api/v1/revenue.py b/assetflow-backend/app/api/v1/revenue.py
+index 07b4df4..c7cd72b 100644
+--- a/assetflow-backend/app/api/v1/revenue.py
++++ b/assetflow-backend/app/api/v1/revenue.py
+@@ -13,6 +13,7 @@ from app.schemas.financial import RevenueCreate, RevenueOut
+ from app.services.transaction_code import generate_transaction_code
+ from app.services.audit_service import log_action
+ from app.services.financial_calculator import recompute_account_balance
++from app.services.lookups import require_account, require_business_unit
+ 
+ router = APIRouter(prefix="/revenue", tags=["revenue"])
+ 
+@@ -31,6 +32,9 @@ def create_revenue(
+     if existing is not None:
+         return existing
+ 
++    require_business_unit(db, payload.business_unit_id)
++    require_account(db, payload.account_id)
++
+     code = generate_transaction_code(
+         db, prefix="REV", table_name="revenue_transactions", code_column=RevenueTransaction.transaction_code
+     )
+diff --git a/assetflow-backend/app/api/v1/shop.py b/assetflow-backend/app/api/v1/shop.py
+index 15ddb70..72f987d 100644
+--- a/assetflow-backend/app/api/v1/shop.py
++++ b/assetflow-backend/app/api/v1/shop.py
+@@ -11,7 +11,6 @@ from app.models.identity import User
+ from app.models.business import BusinessUnit
+ from app.models.shop import (
+     Product,
+-    ProductCategory,
+     Supplier,
+     Customer,
+     Purchase,
+@@ -36,11 +35,12 @@ from app.schemas.shop import (
+     ShopDashboard,
+ )
+ from app.services.audit_service import log_action
++from app.services.lookups import require_account
+ from app.services.transaction_code import generate_transaction_code
+ from app.services.financial_calculator import (
++    INVENTORY_EXPENSE_CATEGORIES,
+     stock_value,
+     shop_gross_profit,
+-    shop_net_profit,
+     total_expense,
+     recompute_account_balance,
+ )
+@@ -194,6 +194,8 @@ def create_purchase(
+         return existing
+ 
+     shop_unit = _get_shop_unit(db)
++    if payload.payment_status == "paid":
++        require_account(db, payload.account_id)
+     total_cost = sum(item.quantity * item.unit_price for item in payload.items)
+ 
+     purchase = Purchase(
+@@ -210,7 +212,7 @@ def create_purchase(
+ 
+     for item in payload.items:
+         product = db.get(Product, item.product_id)
+-        if product is None:
++        if product is None or product.deleted_at is not None:
+             raise HTTPException(status_code=404, detail=f"Product {item.product_id} not found")
+ 
+         line_total = item.quantity * item.unit_price
+@@ -271,21 +273,31 @@ def create_sale(
+         return existing
+ 
+     shop_unit = _get_shop_unit(db)
++    if payload.payment_status == "paid":
++        require_account(db, payload.account_id)
+ 
+-    # Validate stock availability before committing any writes.
+-    products_by_id = {}
++    # Validate stock availability before committing any writes. Quantities are
++    # totalled per product first: the same product on two lines must not each
++    # be checked against the full stock on hand (that allows overselling).
++    requested: dict[uuid.UUID, float] = {}
+     for item in payload.items:
+-        product = db.get(Product, item.product_id)
+-        if product is None:
+-            raise HTTPException(status_code=404, detail=f"Product {item.product_id} not found")
+-        if float(product.current_quantity) < item.quantity:
++        requested[item.product_id] = requested.get(item.product_id, 0.0) + item.quantity
++
++    products_by_id = {}
++    for product_id, needed in requested.items():
++        product = db.get(Product, product_id)
++        if product is None or product.deleted_at is not None:
++            raise HTTPException(status_code=404, detail=f"Product {product_id} not found")
++        if float(product.current_quantity) < needed:
+             raise HTTPException(
+                 status_code=400,
+-                detail=f"Insufficient stock for '{product.name}': have {product.current_quantity}, need {item.quantity}",
++                detail=f"Insufficient stock for '{product.name}': have {product.current_quantity}, need {needed}",
+             )
+-        products_by_id[item.product_id] = product
++        products_by_id[product_id] = product
+ 
+     subtotal = sum(item.quantity * item.unit_price for item in payload.items)
++    if payload.discount > subtotal:
++        raise HTTPException(status_code=400, detail="Discount cannot exceed the sale subtotal")
+     total_amount = subtotal - payload.discount
+ 
+     sale = Sale(
+@@ -357,7 +369,8 @@ def shop_dashboard(
+ ):
+     shop_unit = _get_shop_unit(db)
+     gross = shop_gross_profit(db, shop_unit.id, date_from, date_to)
+-    opex = total_expense(db, business_unit_id=shop_unit.id, date_from=date_from, date_to=date_to)
++    opex = total_expense(db, business_unit_id=shop_unit.id, date_from=date_from, date_to=date_to,
++                         exclude_categories=INVENTORY_EXPENSE_CATEGORIES)
+     net = gross - opex
+ 
+     # revenue and COGS individually, for display
+diff --git a/assetflow-backend/app/api/v1/vehicles.py b/assetflow-backend/app/api/v1/vehicles.py
+index 2ae655d..4cfb434 100644
+--- a/assetflow-backend/app/api/v1/vehicles.py
++++ b/assetflow-backend/app/api/v1/vehicles.py
+@@ -19,12 +19,12 @@ from app.schemas.vehicle import (
+     MaintenanceRecordOut,
+ )
+ from app.services.audit_service import log_action
+-from app.services.financial_calculator import total_revenue, total_expense, net_profit
++from app.services.financial_calculator import total_revenue, total_expense
+ 
+ router = APIRouter(prefix="/vehicles", tags=["vehicles"])
+ 
+ 
+-def _to_out(unit: BusinessUnit, vehicle: Vehicle) -> VehicleOut:
++def _to_out(unit: BusinessUnit, vehicle: Vehicle, category: BusinessCategory) -> VehicleOut:
+     return VehicleOut(
+         id=vehicle.id,
+         business_unit_id=unit.id,
+@@ -42,22 +42,35 @@ def _to_out(unit: BusinessUnit, vehicle: Vehicle) -> VehicleOut:
+         registration_expiry=vehicle.registration_expiry,
+         purchase_price=float(vehicle.purchase_price) if vehicle.purchase_price is not None else None,
+         current_value=float(vehicle.current_value) if vehicle.current_value is not None else None,
++        category_code=category.code,
++        category_name=category.name,
+     )
+ 
+ 
+ @router.get("", response_model=list[VehicleOut])
+ def list_vehicles(
+     status: str | None = None,
++    category: str | None = None,
+     db: Session = Depends(get_db),
+     current_user: User = Depends(require_permission("vehicles", "read")),
+ ):
+-    stmt = select(Vehicle, BusinessUnit).join(BusinessUnit, BusinessUnit.id == Vehicle.business_unit_id).where(
+-        BusinessUnit.deleted_at.is_(None)
++    """`category` filters by BusinessCategory.code, e.g. ?category=MACHINES
++    or ?category=VEHICLES. Omit it to get both (existing callers are
++    unaffected). Single JOIN to BusinessCategory here -- not a per-row
++    lookup -- so this stays O(1) queries regardless of how many vehicles
++    or machines exist."""
++    stmt = (
++        select(Vehicle, BusinessUnit, BusinessCategory)
++        .join(BusinessUnit, BusinessUnit.id == Vehicle.business_unit_id)
++        .join(BusinessCategory, BusinessCategory.id == BusinessUnit.category_id)
++        .where(BusinessUnit.deleted_at.is_(None))
+     )
+     if status:
+         stmt = stmt.where(Vehicle.status == status)
++    if category:
++        stmt = stmt.where(BusinessCategory.code == category)
+     rows = db.execute(stmt).all()
+-    return [_to_out(unit, vehicle) for vehicle, unit in rows]
++    return [_to_out(unit, vehicle, cat) for vehicle, unit, cat in rows]
+ 
+ 
+ @router.post("", response_model=VehicleOut, status_code=201)
+@@ -98,7 +111,7 @@ def create_vehicle(
+                new_value={"name": payload.name})
+     db.commit()
+     db.refresh(vehicle)
+-    return _to_out(unit, vehicle)
++    return _to_out(unit, vehicle, category)
+ 
+ 
+ @router.get("/{vehicle_id}", response_model=VehicleOut)
+@@ -111,7 +124,8 @@ def get_vehicle(
+     if vehicle is None:
+         raise HTTPException(status_code=404, detail="Vehicle not found")
+     unit = db.get(BusinessUnit, vehicle.business_unit_id)
+-    return _to_out(unit, vehicle)
++    category = db.get(BusinessCategory, unit.category_id)
++    return _to_out(unit, vehicle, category)
+ 
+ 
+ @router.patch("/{vehicle_id}", response_model=VehicleOut)
+@@ -130,12 +144,15 @@ def update_vehicle(
+     for field, value in updates.items():
+         setattr(vehicle, field, value)
+ 
++    # str(): audit_logs.new_value is JSONB, which can't serialise date objects
++    # (insurance_expiry / registration_expiry would raise on every update).
+     log_action(db, user_id=current_user.id, entity_type="vehicle", entity_id=vehicle.id, action="update",
+-               previous_value=previous, new_value=updates)
++               previous_value=previous, new_value={k: None if v is None else str(v) for k, v in updates.items()})
+     db.commit()
+     db.refresh(vehicle)
+     unit = db.get(BusinessUnit, vehicle.business_unit_id)
+-    return _to_out(unit, vehicle)
++    category = db.get(BusinessCategory, unit.category_id)
++    return _to_out(unit, vehicle, category)
+ 
+ 
+ @router.get("/{vehicle_id}/profitability", response_model=VehicleProfitability)
+diff --git a/assetflow-backend/app/core/config.py b/assetflow-backend/app/core/config.py
+index 0682124..72c1a4c 100644
+--- a/assetflow-backend/app/core/config.py
++++ b/assetflow-backend/app/core/config.py
+@@ -1,3 +1,4 @@
++from pydantic import field_validator
+ from pydantic_settings import BaseSettings, SettingsConfigDict
+ 
+ 
+@@ -17,6 +18,17 @@ class Settings(BaseSettings):
+     # --- Database ---
+     DATABASE_URL: str = "postgresql+psycopg2://assetflow:assetflow@localhost:5432/assetflow"
+ 
++    @field_validator("DATABASE_URL")
++    @classmethod
++    def _normalize_database_url(cls, value: str) -> str:
++        # Some hosts hand out "postgres://..." which SQLAlchemy 2.x refuses to
++        # load; "postgresql://" would also silently pick a driver we don't ship
++        # choices for. Pin psycopg2 explicitly, the driver in requirements.txt.
++        for legacy in ("postgres://", "postgresql://"):
++            if value.startswith(legacy):
++                return "postgresql+psycopg2://" + value[len(legacy):]
++        return value
++
+     # --- Auth / JWT ---
+     JWT_SECRET_KEY: str = "CHANGE_ME_IN_PRODUCTION"
+     JWT_ALGORITHM: str = "HS256"
+diff --git a/assetflow-backend/app/core/dependencies.py b/assetflow-backend/app/core/dependencies.py
+index 35a73ea..ddd226b 100644
+--- a/assetflow-backend/app/core/dependencies.py
++++ b/assetflow-backend/app/core/dependencies.py
+@@ -26,13 +26,11 @@ def get_current_user(
+         payload = decode_token(token)
+         if payload.get("type") != "access":
+             raise credentials_error
+-        user_id = payload.get("sub")
+-        if user_id is None:
+-            raise credentials_error
+-    except JWTError:
++        user_id = uuid.UUID(str(payload.get("sub")))
++    except (JWTError, ValueError):
+         raise credentials_error
+ 
+-    user = db.get(User, uuid.UUID(user_id))
++    user = db.get(User, user_id)
+     if user is None or not user.active or user.deleted_at is not None:
+         raise credentials_error
+     return user
+diff --git a/assetflow-backend/app/core/rate_limit.py b/assetflow-backend/app/core/rate_limit.py
+index c99b5e5..30ee671 100644
+--- a/assetflow-backend/app/core/rate_limit.py
++++ b/assetflow-backend/app/core/rate_limit.py
+@@ -12,10 +12,12 @@ import time
+ 
+ import redis
+ from fastapi import Request
++from jose import JWTError
+ from starlette.middleware.base import BaseHTTPMiddleware
+ from starlette.responses import JSONResponse
+ 
+ from app.core.config import settings
++from app.core.security import decode_token
+ 
+ try:
+     _redis_client = redis.from_url(settings.REDIS_URL, socket_connect_timeout=0.5, socket_timeout=0.5)
+@@ -23,18 +25,35 @@ except Exception:  # noqa: BLE001
+     _redis_client = None
+ 
+ 
++def client_identity(request: Request) -> str:
++    """
++    Rate-limit bucket key: the verified token subject when a valid bearer token
++    is present, otherwise the client IP.
++
++    (The previous implementation used the first 30 characters of the raw token.
++    Those characters are the base64 JWT *header*, which is identical for every
++    HS256 token this API issues -- so every user shared a single bucket.)
++    Unverifiable tokens fall back to the IP so a caller cannot dodge the limit
++    by sending random bearer strings.
++    """
++    ip = request.client.host if request.client else "unknown"
++    auth_header = request.headers.get("authorization", "")
++    if auth_header.startswith("Bearer "):
++        try:
++            sub = decode_token(auth_header[7:]).get("sub")
++        except JWTError:
++            sub = None
++        if sub:
++            return f"user:{sub}"
++    return f"ip:{ip}"
++
++
+ class RateLimitMiddleware(BaseHTTPMiddleware):
+     async def dispatch(self, request: Request, call_next):
+         if _redis_client is None:
+             return await call_next(request)
+ 
+-        # Identify caller: prefer the bearer token subject if present (cheap parse,
+-        # not a full verify -- full verification still happens in get_current_user),
+-        # otherwise fall back to client IP.
+-        identity = request.client.host if request.client else "unknown"
+-        auth_header = request.headers.get("authorization", "")
+-        if auth_header.startswith("Bearer "):
+-            identity = auth_header[7:37]  # first 30 chars of the token is a stable-enough bucket key
++        identity = client_identity(request)
+ 
+         window = int(time.time() // 60)
+         key = f"ratelimit:{identity}:{window}"
+diff --git a/assetflow-backend/app/core/security.py b/assetflow-backend/app/core/security.py
+index 9233937..2ac94e4 100644
+--- a/assetflow-backend/app/core/security.py
++++ b/assetflow-backend/app/core/security.py
+@@ -1,7 +1,7 @@
+ from datetime import datetime, timedelta, timezone
+ from typing import Any
+ 
+-from jose import jwt, JWTError
++from jose import jwt
+ from passlib.context import CryptContext
+ 
+ from app.core.config import settings
+diff --git a/assetflow-backend/app/models/financial.py b/assetflow-backend/app/models/financial.py
+index 73e6d54..6bb08b7 100644
+--- a/assetflow-backend/app/models/financial.py
++++ b/assetflow-backend/app/models/financial.py
+@@ -3,7 +3,7 @@ from datetime import date, datetime
+ 
+ from sqlalchemy import String, Numeric, ForeignKey, Date, DateTime, func, CheckConstraint, Text
+ from sqlalchemy.dialects.postgresql import UUID
+-from sqlalchemy.orm import Mapped, mapped_column, relationship
++from sqlalchemy.orm import Mapped, mapped_column
+ 
+ from app.core.database import Base
+ from app.models.mixins import UUIDPKMixin, SoftDeleteMixin
+diff --git a/assetflow-backend/app/schemas/shop.py b/assetflow-backend/app/schemas/shop.py
+index d05ec41..8ff58da 100644
+--- a/assetflow-backend/app/schemas/shop.py
++++ b/assetflow-backend/app/schemas/shop.py
+@@ -19,9 +19,9 @@ class ProductCreate(BaseModel):
+ class ProductUpdate(BaseModel):
+     name: str | None = None
+     category_id: uuid.UUID | None = None
+-    purchase_price: float | None = None
+-    selling_price: float | None = None
+-    min_stock_level: float | None = None
++    purchase_price: float | None = Field(default=None, ge=0)
++    selling_price: float | None = Field(default=None, ge=0)
++    min_stock_level: float | None = Field(default=None, ge=0)
+     warehouse_location: str | None = None
+ 
+ 
+@@ -116,7 +116,7 @@ class SaleCreate(BaseModel):
+     customer_id: uuid.UUID | None = None
+     account_id: uuid.UUID  # account the sale proceeds land in
+     items: list[SaleItemIn] = Field(min_length=1)
+-    discount: float = 0
++    discount: float = Field(default=0, ge=0)
+     payment_method: str | None = None
+     payment_status: str = "paid"
+     sale_date: date
+diff --git a/assetflow-backend/app/schemas/vehicle.py b/assetflow-backend/app/schemas/vehicle.py
+index 4b95316..027e4b3 100644
+--- a/assetflow-backend/app/schemas/vehicle.py
++++ b/assetflow-backend/app/schemas/vehicle.py
+@@ -1,235 +1,90 @@
+ import uuid
+ from datetime import date
+ 
+-from fastapi import APIRouter, Depends, HTTPException
+-from sqlalchemy import select
+-from sqlalchemy.orm import Session
+-
+-from app.core.database import get_db
+-from app.core.dependencies import require_permission
+-from app.models.identity import User
+-from app.models.business import BusinessUnit, Vehicle, BusinessCategory
+-from app.models.financial import MaintenanceRecord
+-from app.schemas.vehicle import (
+-    VehicleCreate,
+-    VehicleUpdate,
+-    VehicleOut,
+-    VehicleProfitability,
+-    MaintenanceRecordCreate,
+-    MaintenanceRecordOut,
+-)
+-from app.services.audit_service import log_action
+-from app.services.financial_calculator import total_revenue, total_expense, net_profit
+-
+-router = APIRouter(prefix="/vehicles", tags=["vehicles"])
+-
+-
+-def _to_out(unit: BusinessUnit, vehicle: Vehicle, category: BusinessCategory) -> VehicleOut:
+-    return VehicleOut(
+-        id=vehicle.id,
+-        business_unit_id=unit.id,
+-        name=unit.name,
+-        plate_number=vehicle.plate_number,
+-        vehicle_type=vehicle.vehicle_type,
+-        manufacturer=vehicle.manufacturer,
+-        model=vehicle.model,
+-        year=vehicle.year,
+-        driver_name=vehicle.driver_name,
+-        mileage=float(vehicle.mileage or 0),
+-        operating_hours=float(vehicle.operating_hours) if vehicle.operating_hours is not None else None,
+-        status=vehicle.status,
+-        insurance_expiry=vehicle.insurance_expiry,
+-        registration_expiry=vehicle.registration_expiry,
+-        purchase_price=float(vehicle.purchase_price) if vehicle.purchase_price is not None else None,
+-        current_value=float(vehicle.current_value) if vehicle.current_value is not None else None,
+-        category_code=category.code,
+-        category_name=category.name,
+-    )
+-
+-
+-@router.get("", response_model=list[VehicleOut])
+-def list_vehicles(
+-    status: str | None = None,
+-    category: str | None = None,
+-    db: Session = Depends(get_db),
+-    current_user: User = Depends(require_permission("vehicles", "read")),
+-):
+-    """`category` filters by BusinessCategory.code, e.g. ?category=MACHINES
+-    or ?category=VEHICLES. Omit it to get both (existing callers are
+-    unaffected). Single JOIN to BusinessCategory here -- not a per-row
+-    lookup -- so this stays O(1) queries regardless of how many vehicles
+-    or machines exist."""
+-    stmt = (
+-        select(Vehicle, BusinessUnit, BusinessCategory)
+-        .join(BusinessUnit, BusinessUnit.id == Vehicle.business_unit_id)
+-        .join(BusinessCategory, BusinessCategory.id == BusinessUnit.category_id)
+-        .where(BusinessUnit.deleted_at.is_(None))
+-    )
+-    if status:
+-        stmt = stmt.where(Vehicle.status == status)
+-    if category:
+-        stmt = stmt.where(BusinessCategory.code == category)
+-    rows = db.execute(stmt).all()
+-    return [_to_out(unit, vehicle, cat) for vehicle, unit, cat in rows]
+-
+-
+-@router.post("", response_model=VehicleOut, status_code=201)
+-def create_vehicle(
+-    payload: VehicleCreate,
+-    db: Session = Depends(get_db),
+-    current_user: User = Depends(require_permission("vehicles", "create")),
+-):
+-    category = db.execute(select(BusinessCategory).where(BusinessCategory.code == "VEHICLES")).scalar_one_or_none()
+-    if category is None:
+-        raise HTTPException(status_code=500, detail="VEHICLES business category not seeded")
+-
+-    unit = BusinessUnit(category_id=category.id, unit_type="vehicle", name=payload.name)
+-    db.add(unit)
+-    db.flush()
+-
+-    vehicle = Vehicle(
+-        business_unit_id=unit.id,
+-        plate_number=payload.plate_number,
+-        vehicle_type=payload.vehicle_type,
+-        manufacturer=payload.manufacturer,
+-        model=payload.model,
+-        year=payload.year,
+-        purchase_date=payload.purchase_date,
+-        purchase_price=payload.purchase_price,
+-        current_value=payload.current_value,
+-        driver_name=payload.driver_name,
+-        mileage=payload.mileage,
+-        operating_hours=payload.operating_hours,
+-        status=payload.status,
+-        insurance_expiry=payload.insurance_expiry,
+-        registration_expiry=payload.registration_expiry,
+-    )
+-    db.add(vehicle)
+-    db.flush()
+-
+-    log_action(db, user_id=current_user.id, entity_type="vehicle", entity_id=vehicle.id, action="create",
+-               new_value={"name": payload.name})
+-    db.commit()
+-    db.refresh(vehicle)
+-    return _to_out(unit, vehicle, category)
+-
+-
+-@router.get("/{vehicle_id}", response_model=VehicleOut)
+-def get_vehicle(
+-    vehicle_id: uuid.UUID,
+-    db: Session = Depends(get_db),
+-    current_user: User = Depends(require_permission("vehicles", "read")),
+-):
+-    vehicle = db.get(Vehicle, vehicle_id)
+-    if vehicle is None:
+-        raise HTTPException(status_code=404, detail="Vehicle not found")
+-    unit = db.get(BusinessUnit, vehicle.business_unit_id)
+-    category = db.get(BusinessCategory, unit.category_id)
+-    return _to_out(unit, vehicle, category)
+-
+-
+-@router.patch("/{vehicle_id}", response_model=VehicleOut)
+-def update_vehicle(
+-    vehicle_id: uuid.UUID,
+-    payload: VehicleUpdate,
+-    db: Session = Depends(get_db),
+-    current_user: User = Depends(require_permission("vehicles", "update")),
+-):
+-    vehicle = db.get(Vehicle, vehicle_id)
+-    if vehicle is None:
+-        raise HTTPException(status_code=404, detail="Vehicle not found")
+-
+-    previous = {"status": vehicle.status, "mileage": str(vehicle.mileage), "driver_name": vehicle.driver_name}
+-    updates = payload.model_dump(exclude_unset=True)
+-    for field, value in updates.items():
+-        setattr(vehicle, field, value)
+-
+-    log_action(db, user_id=current_user.id, entity_type="vehicle", entity_id=vehicle.id, action="update",
+-               previous_value=previous, new_value=updates)
+-    db.commit()
+-    db.refresh(vehicle)
+-    unit = db.get(BusinessUnit, vehicle.business_unit_id)
+-    category = db.get(BusinessCategory, unit.category_id)
+-    return _to_out(unit, vehicle, category)
+-
+-
+-@router.get("/{vehicle_id}/profitability", response_model=VehicleProfitability)
+-def vehicle_profitability(
+-    vehicle_id: uuid.UUID,
+-    date_from: date | None = None,
+-    date_to: date | None = None,
+-    db: Session = Depends(get_db),
+-    current_user: User = Depends(require_permission("vehicles", "read")),
+-):
+-    """
+-    Vehicle Profit = Vehicle Revenue - Vehicle Expenses (Section 4/8).
+-    Cost/Profit per km and cost per operating hour are computed from the
+-    vehicle's current cumulative mileage/operating_hours, since the schema
+-    doesn't track per-period mileage deltas -- for period-scoped rates,
+-    add a mileage log table in a future iteration.
+-    """
+-    vehicle = db.get(Vehicle, vehicle_id)
+-    if vehicle is None:
+-        raise HTTPException(status_code=404, detail="Vehicle not found")
+-    unit = db.get(BusinessUnit, vehicle.business_unit_id)
+-
+-    revenue = total_revenue(db, business_unit_id=unit.id, date_from=date_from, date_to=date_to)
+-    expense = total_expense(db, business_unit_id=unit.id, date_from=date_from, date_to=date_to)
+-    profit = revenue - expense
+-    mileage = float(vehicle.mileage or 0)
+-
+-    return VehicleProfitability(
+-        vehicle_id=vehicle.id,
+-        name=unit.name,
+-        period_from=date_from,
+-        period_to=date_to,
+-        revenue=revenue,
+-        expenses=expense,
+-        profit=profit,
+-        mileage=mileage,
+-        cost_per_km=(expense / mileage) if mileage else None,
+-        profit_per_km=(profit / mileage) if mileage else None,
+-        cost_per_operating_hour=(expense / float(vehicle.operating_hours)) if vehicle.operating_hours else None,
+-    )
+-
+-
+-@router.post("/{vehicle_id}/maintenance", response_model=MaintenanceRecordOut, status_code=201)
+-def add_maintenance_record(
+-    vehicle_id: uuid.UUID,
+-    payload: MaintenanceRecordCreate,
+-    db: Session = Depends(get_db),
+-    current_user: User = Depends(require_permission("vehicles", "update")),
+-):
+-    vehicle = db.get(Vehicle, vehicle_id)
+-    if vehicle is None:
+-        raise HTTPException(status_code=404, detail="Vehicle not found")
+-
+-    record = MaintenanceRecord(
+-        business_unit_id=vehicle.business_unit_id,
+-        description=payload.description,
+-        cost=payload.cost,
+-        performed_at=payload.performed_at,
+-        next_due=payload.next_due,
+-    )
+-    db.add(record)
+-    db.flush()
+-    log_action(db, user_id=current_user.id, entity_type="maintenance_record", entity_id=record.id, action="create",
+-               new_value={"cost": str(payload.cost)})
+-    db.commit()
+-    db.refresh(record)
+-    return record
+-
+-
+-@router.get("/{vehicle_id}/maintenance", response_model=list[MaintenanceRecordOut])
+-def list_maintenance_records(
+-    vehicle_id: uuid.UUID,
+-    db: Session = Depends(get_db),
+-    current_user: User = Depends(require_permission("vehicles", "read")),
+-):
+-    vehicle = db.get(Vehicle, vehicle_id)
+-    if vehicle is None:
+-        raise HTTPException(status_code=404, detail="Vehicle not found")
+-    stmt = select(MaintenanceRecord).where(MaintenanceRecord.business_unit_id == vehicle.business_unit_id).order_by(
+-        MaintenanceRecord.performed_at.desc()
+-    )
+-    return db.execute(stmt).scalars().all()
++from pydantic import BaseModel, Field
++
++
++class VehicleCreate(BaseModel):
++    name: str  # becomes the business_unit name
++    plate_number: str | None = None
++    vehicle_type: str | None = None
++    manufacturer: str | None = None
++    model: str | None = None
++    year: int | None = None
++    purchase_date: date | None = None
++    purchase_price: float | None = None
++    current_value: float | None = None
++    driver_name: str | None = None
++    mileage: float = 0
++    operating_hours: float | None = None
++    status: str = "active"
++    insurance_expiry: date | None = None
++    registration_expiry: date | None = None
++
++
++class VehicleUpdate(BaseModel):
++    plate_number: str | None = None
++    vehicle_type: str | None = None
++    manufacturer: str | None = None
++    model: str | None = None
++    year: int | None = None
++    driver_name: str | None = None
++    mileage: float | None = None
++    operating_hours: float | None = None
++    status: str | None = None
++    insurance_expiry: date | None = None
++    registration_expiry: date | None = None
++    current_value: float | None = None
++
++
++class VehicleOut(BaseModel):
++    id: uuid.UUID
++    business_unit_id: uuid.UUID
++    name: str
++    plate_number: str | None
++    vehicle_type: str | None
++    manufacturer: str | None
++    model: str | None
++    year: int | None
++    driver_name: str | None
++    mileage: float
++    operating_hours: float | None
++    status: str
++    insurance_expiry: date | None
++    registration_expiry: date | None
++    purchase_price: float | None
++    current_value: float | None
++    category_code: str | None = None  # VEHICLES | MACHINES
++    category_name: str | None = None
++
++
++class VehicleProfitability(BaseModel):
++    vehicle_id: uuid.UUID
++    name: str
++    period_from: date | None
++    period_to: date | None
++    revenue: float
++    expenses: float
++    profit: float
++    mileage: float
++    cost_per_km: float | None
++    profit_per_km: float | None
++    cost_per_operating_hour: float | None
++
++
++class MaintenanceRecordCreate(BaseModel):
++    description: str | None = None
++    cost: float = Field(ge=0, default=0)
++    performed_at: date | None = None
++    next_due: date | None = None
++
++
++class MaintenanceRecordOut(BaseModel):
++    id: uuid.UUID
++    business_unit_id: uuid.UUID
++    description: str | None
++    cost: float | None
++    performed_at: date | None
++    next_due: date | None
++
++    model_config = {"from_attributes": True}
+diff --git a/assetflow-backend/app/services/export_service.py b/assetflow-backend/app/services/export_service.py
+index 6600bea..5dcbf24 100644
+--- a/assetflow-backend/app/services/export_service.py
++++ b/assetflow-backend/app/services/export_service.py
+@@ -14,11 +14,23 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph,
+ from reportlab.lib.styles import getSampleStyleSheet
+ 
+ 
++_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
++
++
++def _safe_cell(value):
++    """Text starting with = + - @ is executed as a formula by Excel/Sheets/LibreOffice
++    (CSV/formula injection). Descriptions are user-entered, so prefix such cells
++    with an apostrophe. Numbers are left untouched (negatives stay numeric)."""
++    if isinstance(value, str) and value.startswith(_FORMULA_PREFIXES):
++        return "'" + value
++    return value
++
++
+ def to_csv_bytes(headers: list[str], rows: list[list]) -> bytes:
+     buffer = io.StringIO()
+     writer = csv.writer(buffer)
+     writer.writerow(headers)
+-    writer.writerows(rows)
++    writer.writerows([[_safe_cell(c) for c in row] for row in rows])
+     return buffer.getvalue().encode("utf-8")
+ 
+ 
+@@ -28,7 +40,7 @@ def to_xlsx_bytes(headers: list[str], rows: list[list], sheet_title: str = "Repo
+     ws.title = sheet_title[:31]  # Excel sheet name limit
+     ws.append(headers)
+     for row in rows:
+-        ws.append(row)
++        ws.append([_safe_cell(c) for c in row])
+ 
+     # Light auto-width based on header/content length
+     for col_idx, header in enumerate(headers, start=1):
+diff --git a/assetflow-backend/app/services/financial_calculator.py b/assetflow-backend/app/services/financial_calculator.py
+index f12739b..d3905ef 100644
+--- a/assetflow-backend/app/services/financial_calculator.py
++++ b/assetflow-backend/app/services/financial_calculator.py
+@@ -18,12 +18,21 @@ from app.models.financial import (
+     ExpenseTransaction,
+     RentalTransaction,
+ )
+-from app.models.shop import Sale, Purchase, Product
++from app.models.shop import Sale, Product
++
++
++# Expense categories that are stock purchases rather than running costs. Their
++# cost reaches the shop P&L through COGS when the goods are sold, so counting
++# them again as operating expenses would deduct the same money twice.
++INVENTORY_EXPENSE_CATEGORIES = ("inventory_purchase",)
+ 
+ 
+ def _sum_amount(db: Session, model, column, business_unit_id: uuid.UUID | None = None,
+-                 date_from: date | None = None, date_to: date | None = None) -> float:
++                 date_from: date | None = None, date_to: date | None = None,
++                 exclude_categories: tuple[str, ...] | None = None) -> float:
+     stmt = select(func.coalesce(func.sum(column), 0))
++    if exclude_categories and hasattr(model, "category"):
++        stmt = stmt.where(model.category.not_in(exclude_categories))
+     if hasattr(model, "deleted_at"):
+         stmt = stmt.where(model.deleted_at.is_(None))
+     if business_unit_id is not None and hasattr(model, "business_unit_id"):
+@@ -41,8 +50,10 @@ def total_revenue(db: Session, business_unit_id: uuid.UUID | None = None,
+ 
+ 
+ def total_expense(db: Session, business_unit_id: uuid.UUID | None = None,
+-                   date_from: date | None = None, date_to: date | None = None) -> float:
+-    return _sum_amount(db, ExpenseTransaction, ExpenseTransaction.amount, business_unit_id, date_from, date_to)
++                   date_from: date | None = None, date_to: date | None = None,
++                   exclude_categories: tuple[str, ...] | None = None) -> float:
++    return _sum_amount(db, ExpenseTransaction, ExpenseTransaction.amount, business_unit_id, date_from, date_to,
++                       exclude_categories)
+ 
+ 
+ def net_profit(db: Session, business_unit_id: uuid.UUID | None = None,
+@@ -67,7 +78,7 @@ def profit_per_kilometer(db: Session, business_unit_id: uuid.UUID, total_mileage
+ 
+ def outstanding_rent(db: Session, property_id: uuid.UUID | None = None) -> float:
+     stmt = select(
+-        func.coalesce(func.sum(RentalTransaction.amount_due - RentalTransaction.amount_paid), 0)
++        func.coalesce(func.sum(func.greatest(RentalTransaction.amount_due - RentalTransaction.amount_paid, 0)), 0)
+     )
+     if property_id is not None:
+         stmt = stmt.where(RentalTransaction.property_id == property_id)
+@@ -85,7 +96,9 @@ def shop_gross_profit(db: Session, business_unit_id: uuid.UUID,
+     """Gross Profit = Sales Revenue - Cost of Goods Sold.
+     COGS is approximated from sale_items x product purchase_price at time of query;
+     for full accuracy, capture unit_cost on SaleItem at sale time in a future iteration."""
+-    sales_stmt = select(func.coalesce(func.sum(Sale.total_amount - Sale.discount), 0)).where(
++    # Sale.total_amount is stored net of discount (subtotal - discount), so the
++    # discount must not be subtracted a second time here.
++    sales_stmt = select(func.coalesce(func.sum(Sale.total_amount), 0)).where(
+         Sale.business_unit_id == business_unit_id
+     )
+     if date_from is not None:
+@@ -115,7 +128,8 @@ def shop_net_profit(db: Session, business_unit_id: uuid.UUID,
+                      date_from: date | None = None, date_to: date | None = None) -> float:
+     """Net Profit (Shop) = Gross Profit - Operating Expenses."""
+     gross = shop_gross_profit(db, business_unit_id, date_from, date_to)
+-    opex = total_expense(db, business_unit_id, date_from, date_to)
++    opex = total_expense(db, business_unit_id, date_from, date_to,
++                         exclude_categories=INVENTORY_EXPENSE_CATEGORIES)
+     return gross - opex
+ 
+ 
+@@ -138,7 +152,7 @@ def recompute_account_balance(db: Session, account_id: uuid.UUID) -> float:
+     if account is None:
+         raise ValueError(f"Account {account_id} not found")
+ 
+-    income = _sum_amount(db, RevenueTransaction, RevenueTransaction.amount) if False else float(
++    income = float(
+         db.execute(
+             select(func.coalesce(func.sum(RevenueTransaction.amount), 0)).where(
+                 RevenueTransaction.account_id == account_id, RevenueTransaction.deleted_at.is_(None)
+diff --git a/assetflow-backend/app/services/lookups.py b/assetflow-backend/app/services/lookups.py
+new file mode 100644
+index 0000000..e89e82c
+--- /dev/null
++++ b/assetflow-backend/app/services/lookups.py
+@@ -0,0 +1,23 @@
++"""Small existence checks that turn dangling foreign keys into clean 404s
++(instead of a database IntegrityError / ValueError surfacing as a 500)."""
++import uuid
++
++from fastapi import HTTPException
++from sqlalchemy.orm import Session
++
++from app.models.business import BusinessUnit
++from app.models.financial import Account
++
++
++def require_account(db: Session, account_id: uuid.UUID) -> Account:
++    account = db.get(Account, account_id)
++    if account is None:
++        raise HTTPException(status_code=404, detail="Account not found")
++    return account
++
++
++def require_business_unit(db: Session, business_unit_id: uuid.UUID) -> BusinessUnit:
++    unit = db.get(BusinessUnit, business_unit_id)
++    if unit is None or unit.deleted_at is not None:
++        raise HTTPException(status_code=404, detail="Business unit not found")
++    return unit
+diff --git a/assetflow-backend/app/services/notification_rules.py b/assetflow-backend/app/services/notification_rules.py
+index 21267ca..764175b 100644
+--- a/assetflow-backend/app/services/notification_rules.py
++++ b/assetflow-backend/app/services/notification_rules.py
+@@ -39,10 +39,13 @@ def _notify_if_new(db: Session, user_id, notif_type: str, title: str, body: str)
+             Notification.title == title,
+             Notification.is_read.is_(False),
+         )
+-    ).scalar_one_or_none()
++    ).scalars().first()  # .first(): duplicates must never crash the whole run
+     if existing is not None:
+         return False
+     db.add(Notification(user_id=user_id, type=notif_type, title=title, body=body))
++    # Session autoflush is off; flush so the next identical notification in this
++    # same run is found by the query above instead of being inserted again.
++    db.flush()
+     return True
+ 
+ 
+diff --git a/assetflow-backend/app/services/transaction_code.py b/assetflow-backend/app/services/transaction_code.py
+index 51831b4..679fa8e 100644
+--- a/assetflow-backend/app/services/transaction_code.py
++++ b/assetflow-backend/app/services/transaction_code.py
+@@ -1,33 +1,34 @@
+ from datetime import date
+ 
+-from sqlalchemy import func, select
++from sqlalchemy import func, select, text
+ from sqlalchemy.orm import Session
+ 
+-_PREFIX_MODEL_MAP = {
+-    "REV": "revenue_transactions",
+-    "EXP": "expense_transactions",
+-    "SALE": "sales",
+-    "PUR": "purchases",
+-    "PAY": "payments",
+-}
+-
+ 
+ def generate_transaction_code(db: Session, prefix: str, table_name: str, code_column) -> str:
+     """
+     Generates codes like 'REV-2026-000001'.
+ 
+-    Uses a per-year sequential counter derived from the count of existing rows
+-    for that year+prefix, wrapped in the caller's DB transaction with a
+-    SELECT ... FOR UPDATE-style lock is avoided here for simplicity; for high
+-    concurrency, replace with a dedicated `sequence_counters` table using
+-    SELECT ... FOR UPDATE to prevent race conditions on the count.
++    The next number is derived from the highest existing code for that
++    prefix+year (NOT the row count -- counting breaks as soon as any row has
++    ever been removed, and then re-issues an existing code, which violates the
++    UNIQUE constraint). A transaction-scoped advisory lock serializes
++    concurrent writers for the same prefix+year so two requests can't both read
++    the same maximum; it is released automatically on commit/rollback.
+     """
+     year = date.today().year
+-    like_pattern = f"{prefix}-{year}-%"
++    stem = f"{prefix}-{year}-"
++
++    db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"txn-code:{stem}"})
+ 
+-    count = db.execute(
+-        select(func.count()).select_from(code_column.table).where(code_column.like(like_pattern))
++    last_code = db.execute(
++        select(func.max(code_column)).where(code_column.like(f"{stem}%"))
+     ).scalar_one()
+ 
+-    next_seq = count + 1
+-    return f"{prefix}-{year}-{next_seq:06d}"
++    last_seq = 0
++    if last_code:
++        try:
++            last_seq = int(last_code.rsplit("-", 1)[1])
++        except (IndexError, ValueError):
++            last_seq = 0
++
++    return f"{stem}{last_seq + 1:06d}"
+diff --git a/assetflow-backend/requirements-dev.txt b/assetflow-backend/requirements-dev.txt
+new file mode 100644
+index 0000000..b918a15
+--- /dev/null
++++ b/assetflow-backend/requirements-dev.txt
+@@ -0,0 +1,3 @@
++-r requirements.txt
++pytest==8.3.3
++httpx==0.27.2
+diff --git a/assetflow-backend/tests/__init__.py b/assetflow-backend/tests/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/assetflow-backend/tests/conftest.py b/assetflow-backend/tests/conftest.py
+new file mode 100644
+index 0000000..b6d1a04
+--- /dev/null
++++ b/assetflow-backend/tests/conftest.py
+@@ -0,0 +1,59 @@
++"""
++Integration tests run against a real PostgreSQL database (the models use
++Postgres-only types: UUID, JSONB). Point TEST_DATABASE_URL at a throwaway DB:
++
++    export DATABASE_URL=postgresql+psycopg2://assetflow:assetflow@localhost:5432/assetflow_test
++    alembic upgrade head && python -m app.seed && pytest
++"""
++import uuid
++from datetime import date
++
++import pytest
++from fastapi.testclient import TestClient
++
++from app.main import app
++from app.core.database import SessionLocal
++from app.models.business import BusinessUnit
++from app.models.financial import Account
++
++
++@pytest.fixture(scope="session")
++def client():
++    with TestClient(app) as c:
++        yield c
++
++
++@pytest.fixture(scope="session")
++def auth(client):
++    r = client.post("/api/v1/auth/login", json={"email": "admin@assetflow.app", "password": "ChangeMe123!"})
++    assert r.status_code == 200, r.text
++    return {"Authorization": f"Bearer {r.json()['access_token']}"}
++
++
++@pytest.fixture()
++def db():
++    with SessionLocal() as session:
++        yield session
++
++
++@pytest.fixture()
++def cash_account_id(db):
++    return str(db.query(Account).filter(Account.name == "Main Cash").one().id)
++
++
++@pytest.fixture()
++def vehicle_unit_id(db):
++    return str(db.query(BusinessUnit).filter(BusinessUnit.unit_type == "vehicle").first().id)
++
++
++@pytest.fixture()
++def shop_unit_id(db):
++    return str(db.query(BusinessUnit).filter(BusinessUnit.unit_type == "shop").one().id)
++
++
++def revenue_payload(unit_id, account_id, amount=100, **kw):
++    return {
++        "business_unit_id": unit_id, "account_id": account_id, "category": "test",
++        "amount": amount, "txn_date": date.today().isoformat(),
++        "idempotency_key": str(uuid.uuid4()), **kw,
++    }
+diff --git a/assetflow-backend/tests/test_config.py b/assetflow-backend/tests/test_config.py
+new file mode 100644
+index 0000000..6b82749
+--- /dev/null
++++ b/assetflow-backend/tests/test_config.py
+@@ -0,0 +1,8 @@
++from app.core.config import Settings
++
++
++def test_legacy_postgres_urls_are_normalised():
++    assert Settings(DATABASE_URL="postgres://u:p@h/db").DATABASE_URL == "postgresql+psycopg2://u:p@h/db"
++    assert Settings(DATABASE_URL="postgresql://u:p@h/db").DATABASE_URL == "postgresql+psycopg2://u:p@h/db"
++    explicit = "postgresql+psycopg2://u:p@h/db"
++    assert Settings(DATABASE_URL=explicit).DATABASE_URL == explicit
+diff --git a/assetflow-backend/tests/test_regressions.py b/assetflow-backend/tests/test_regressions.py
+new file mode 100644
+index 0000000..b86e1fc
+--- /dev/null
++++ b/assetflow-backend/tests/test_regressions.py
+@@ -0,0 +1,187 @@
++import uuid
++from datetime import date, timedelta
++
++from jose import jwt
++
++from app.core.config import settings
++from tests.conftest import revenue_payload
++
++API = "/api/v1"
++
++
++# ---------- auth ----------
++
++def test_login_email_is_case_insensitive(client):
++    r = client.post(f"{API}/auth/login", json={"email": "Admin@AssetFlow.app", "password": "ChangeMe123!"})
++    assert r.status_code == 200
++
++
++def test_token_with_malformed_subject_is_401_not_500(client):
++    bad = jwt.encode({"sub": "not-a-uuid", "type": "access"}, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
++    r = client.get(f"{API}/auth/me", headers={"Authorization": f"Bearer {bad}"})
++    assert r.status_code == 401
++
++
++def test_refresh_token_missing_claims_is_401(client):
++    bad = jwt.encode({"type": "refresh"}, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
++    r = client.post(f"{API}/auth/refresh", json={"refresh_token": bad})
++    assert r.status_code == 401
++
++
++# ---------- rate limiting ----------
++
++def test_rate_limit_buckets_differ_per_user():
++    from starlette.requests import Request
++    from app.core.rate_limit import client_identity
++
++    def req(token):
++        return Request({"type": "http", "headers": [(b"authorization", f"Bearer {token}".encode())],
++                        "client": ("1.2.3.4", 1)})
++
++    a = jwt.encode({"sub": str(uuid.uuid4()), "type": "access"}, settings.JWT_SECRET_KEY, algorithm="HS256")
++    b = jwt.encode({"sub": str(uuid.uuid4()), "type": "access"}, settings.JWT_SECRET_KEY, algorithm="HS256")
++    assert client_identity(req(a)) != client_identity(req(b))
++
++
++# ---------- transaction codes / validation ----------
++
++def test_transaction_code_survives_hard_deleted_rows(client, auth, db, vehicle_unit_id, cash_account_id):
++    from sqlalchemy import text
++    codes = []
++    for _ in range(2):
++        r = client.post(f"{API}/revenue", json=revenue_payload(vehicle_unit_id, cash_account_id), headers=auth)
++        assert r.status_code == 201, r.text
++        codes.append(r.json()["transaction_code"])
++    db.execute(text("DELETE FROM audit_logs WHERE entity_id IN (SELECT id FROM revenue_transactions WHERE transaction_code=:c)"), {"c": codes[0]})
++    db.execute(text("DELETE FROM revenue_transactions WHERE transaction_code=:c"), {"c": codes[0]})
++    db.commit()
++    r = client.post(f"{API}/revenue", json=revenue_payload(vehicle_unit_id, cash_account_id), headers=auth)
++    assert r.status_code == 201, r.text
++    assert r.json()["transaction_code"] not in codes
++
++
++def test_unknown_account_is_404_not_500(client, auth, vehicle_unit_id):
++    r = client.post(f"{API}/revenue", json=revenue_payload(vehicle_unit_id, str(uuid.uuid4())), headers=auth)
++    assert r.status_code == 404, r.text
++
++
++def test_unknown_business_unit_is_404_not_500(client, auth, cash_account_id):
++    r = client.post(f"{API}/expenses", json={**revenue_payload(str(uuid.uuid4()), cash_account_id)}, headers=auth)
++    assert r.status_code == 404, r.text
++
++
++# ---------- vehicles ----------
++
++def test_vehicle_update_with_dates_writes_audit_log(client, auth):
++    v = client.get(f"{API}/vehicles", headers=auth).json()[0]
++    r = client.patch(f"{API}/vehicles/{v['id']}", json={"insurance_expiry": "2030-01-31"}, headers=auth)
++    assert r.status_code == 200, r.text
++    assert r.json()["insurance_expiry"] == "2030-01-31"
++
++
++# ---------- shop ----------
++
++def _make_product(client, auth, qty_purchase, cash_account_id):
++    sku = f"T-{uuid.uuid4().hex[:8]}"
++    p = client.post(f"{API}/shop/products", headers=auth, json={
++        "name": sku, "sku": sku, "unit": "piece", "purchase_price": 60, "selling_price": 100}).json()
++    r = client.post(f"{API}/shop/purchases", headers=auth, json={
++        "invoice_number": f"PUR-{uuid.uuid4().hex}", "account_id": cash_account_id, "payment_status": "paid",
++        "purchase_date": date.today().isoformat(), "idempotency_key": str(uuid.uuid4()),
++        "items": [{"product_id": p["id"], "quantity": qty_purchase, "unit_price": 60}]})
++    assert r.status_code == 201, r.text
++    return p
++
++
++def _sale(client, auth, cash_account_id, items, discount=0):
++    return client.post(f"{API}/shop/sales", headers=auth, json={
++        "invoice_number": f"SALE-{uuid.uuid4().hex}", "account_id": cash_account_id, "payment_status": "paid",
++        "discount": discount, "sale_date": date.today().isoformat(),
++        "idempotency_key": str(uuid.uuid4()), "items": items})
++
++
++def test_shop_discount_is_only_subtracted_once(client, auth, cash_account_id):
++    before = client.get(f"{API}/shop/dashboard", headers=auth).json()
++    p = _make_product(client, auth, 10, cash_account_id)
++    r = _sale(client, auth, cash_account_id, [{"product_id": p["id"], "quantity": 2, "unit_price": 100}], discount=20)
++    assert r.status_code == 201, r.text
++    assert r.json()["total_amount"] == 180
++    after = client.get(f"{API}/shop/dashboard", headers=auth).json()
++    # sold 2 @100 with 20 discount = 180 revenue; COGS = 2 * 60 = 120; gross = 60
++    assert round(after["revenue"] - before["revenue"], 2) == 180
++    assert round(after["cost_of_goods_sold"] - before["cost_of_goods_sold"], 2) == 120
++    assert round(after["gross_profit"] - before["gross_profit"], 2) == 60
++
++
++def test_inventory_purchases_are_not_double_counted_as_opex(client, auth, cash_account_id):
++    before = client.get(f"{API}/shop/dashboard", headers=auth).json()
++    _make_product(client, auth, 10, cash_account_id)  # buys 600 of stock, paid
++    after = client.get(f"{API}/shop/dashboard", headers=auth).json()
++    # stock purchases are an asset (and hit COGS when sold), not operating expense
++    assert round(after["operating_expenses"] - before["operating_expenses"], 2) == 0
++
++
++def test_cannot_oversell_via_duplicate_lines(client, auth, cash_account_id):
++    p = _make_product(client, auth, 5, cash_account_id)
++    r = _sale(client, auth, cash_account_id, [
++        {"product_id": p["id"], "quantity": 4, "unit_price": 100},
++        {"product_id": p["id"], "quantity": 4, "unit_price": 100}])
++    assert r.status_code == 400, r.text
++
++
++def test_discount_cannot_exceed_subtotal(client, auth, cash_account_id):
++    p = _make_product(client, auth, 5, cash_account_id)
++    r = _sale(client, auth, cash_account_id, [{"product_id": p["id"], "quantity": 1, "unit_price": 100}], discount=500)
++    assert r.status_code in (400, 422), r.text
++
++
++# ---------- rent ----------
++
++def test_rent_retry_with_same_key_is_not_applied_twice(client, auth, cash_account_id):
++    prop = client.get(f"{API}/properties", headers=auth).json()[0]
++    # unique billing period per run, so reruns against the same DB don't accumulate
++    period = date(2100 + uuid.uuid4().int % 7000, 1 + uuid.uuid4().int % 12, 15).isoformat()
++    body = {"period_month": period, "amount_due": 1000, "amount_paid": 400,
++            "account_id": cash_account_id, "idempotency_key": str(uuid.uuid4())}
++    first = client.post(f"{API}/properties/{prop['id']}/rent", json=body, headers=auth)
++    second = client.post(f"{API}/properties/{prop['id']}/rent", json=body, headers=auth)
++    assert first.status_code == 201 and second.status_code == 201, second.text
++    assert second.json()["amount_paid"] == 400
++    assert second.json()["status"] == "partial"
++
++
++# ---------- dashboard ----------
++
++def test_business_performance_contribution_when_overall_profit_is_zero(client, auth):
++    rows = client.get(f"{API}/dashboard/business-performance", headers=auth).json()
++    overall = sum(r["profit"] for r in rows)
++    if abs(overall) < 0.005:
++        assert all(r["percentage_contribution"] == 0 for r in rows)
++    else:
++        assert abs(sum(r["percentage_contribution"] for r in rows) - 100) < 0.1 * len(rows)
++
++
++# ---------- notifications ----------
++
++def test_notification_generation_is_repeatable_with_duplicate_source_rows(client, auth, db):
++    from app.models.business import Vehicle
++    v = db.query(Vehicle).first()
++    due = date.today() + timedelta(days=2)
++    for _ in range(2):  # two records, same unit + due date -> identical notification title
++        client.post(f"{API}/vehicles/{v.id}/maintenance", headers=auth,
++                    json={"description": "oil", "cost": 10, "performed_at": date.today().isoformat(),
++                          "next_due": due.isoformat()})
++    for _ in range(2):
++        r = client.post(f"{API}/notifications/generate", headers=auth)
++        assert r.status_code == 200, r.text
++
++
++# ---------- exports ----------
++
++def test_csv_export_neutralises_formula_cells():
++    from app.services.export_service import to_csv_bytes
++    out = to_csv_bytes(["Description"], [['=HYPERLINK("http://evil","x")'], ["@SUM(1)"], ["normal"]]).decode()
++    lines = out.splitlines()
++    assert lines[1].startswith("'") or lines[1].startswith('"\'')
++    assert "'@SUM(1)" in lines[2]
++    assert lines[3] == "normal"
+diff --git a/assetflow_mobile/.github/workflows/apk.yml b/assetflow_mobile/.github/workflows/apk.yml
+deleted file mode 100644
+index 5e9272c..0000000
+--- a/assetflow_mobile/.github/workflows/apk.yml
++++ /dev/null
+@@ -1,108 +0,0 @@
+-name: Build AssetFlow APK
+-
+-on:
+-  workflow_dispatch:
+-  push:
+-    branches:
+-      - main
+-      - master
+-
+-jobs:
+-  build-apk:
+-    runs-on: ubuntu-latest
+-
+-    steps:
+-      - name: Checkout repository
+-        uses: actions/checkout@v5
+-
+-      - name: Setup Java
+-        uses: actions/setup-java@v5
+-        with:
+-          distribution: temurin
+-          java-version: "17"
+-
+-      - name: Setup Flutter
+-        uses: subosito/flutter-action@v2
+-        with:
+-          flutter-version: "3.35.7"
+-          channel: stable
+-          cache: true
+-
+-      - name: Check Render API
+-        run: |
+-          set -e
+-          DOCS_URL="https://assetflow-api-f435.onrender.com/docs"
+-          HTTP_CODE=$(curl -L -s -o /dev/null -w "%{http_code}" "$DOCS_URL")
+-          echo "Render API HTTP status: $HTTP_CODE"
+-          if [ "$HTTP_CODE" != "200" ]; then
+-            echo "ERROR: Render API is not reachable."
+-            exit 1
+-          fi
+-
+-      - name: Check Flutter project
+-        working-directory: assetflow_mobile
+-        run: |
+-          set -e
+-          test -f pubspec.yaml
+-          test -f lib/main.dart
+-          echo "Flutter project found."
+-
+-      - name: Create Android project when missing
+-        working-directory: assetflow_mobile
+-        run: |
+-          set -e
+-          if [ ! -d android ]; then
+-            flutter create .
+-          fi
+-
+-      - name: Configure Android Internet permission
+-        working-directory: assetflow_mobile
+-        shell: bash
+-        run: |
+-          set -e
+-          MANIFEST="android/app/src/main/AndroidManifest.xml"
+-          test -f "$MANIFEST"
+-          if ! grep -q "android.permission.INTERNET" "$MANIFEST"; then
+-            python3 - <<'PY'
+-from pathlib import Path
+-manifest = Path("android/app/src/main/AndroidManifest.xml")
+-text = manifest.read_text()
+-start = text.find("<manifest")
+-if start == -1:
+-    raise SystemExit("<manifest> tag not found")
+-end = text.find(">", start)
+-if end == -1:
+-    raise SystemExit("Invalid AndroidManifest.xml")
+-permission = '    <uses-permission android:name="android.permission.INTERNET"/>\n'
+-text = text[:end + 1] + "\n" + permission + text[end + 1:]
+-manifest.write_text(text)
+-PY
+-          fi
+-          grep -q "android.permission.INTERNET" "$MANIFEST"
+-
+-      - name: Flutter pub get
+-        working-directory: assetflow_mobile
+-        run: flutter pub get
+-
+-      - name: Analyze Dart code
+-        working-directory: assetflow_mobile
+-        run: flutter analyze
+-
+-      - name: Build release APK
+-        working-directory: assetflow_mobile
+-        run: |
+-          flutter build apk --release \
+-            --dart-define=API_BASE_URL="https://assetflow-api-f435.onrender.com/api/v1"
+-
+-      - name: Verify APK
+-        working-directory: assetflow_mobile
+-        run: |
+-          test -f build/app/outputs/flutter-apk/app-release.apk
+-          ls -lh build/app/outputs/flutter-apk/app-release.apk
+-
+-      - name: Upload APK
+-        uses: actions/upload-artifact@v5
+-        with:
+-          name: assetflow-release-apk
+-          path: assetflow_mobile/build/app/outputs/flutter-apk/app-release.apk
+-          if-no-files-found: error
+diff --git a/assetflow_mobile/lib/core/api_client.dart b/assetflow_mobile/lib/core/api_client.dart
+index cdd755a..c95c071 100644
+--- a/assetflow_mobile/lib/core/api_client.dart
++++ b/assetflow_mobile/lib/core/api_client.dart
+@@ -7,6 +7,17 @@ import 'secure_storage.dart';
+ 
+ class SessionExpiredException implements Exception {}
+ 
++enum _RefreshResult {
++  /// New tokens were obtained and saved.
++  refreshed,
++
++  /// The server rejected the refresh token: the session is really over.
++  rejected,
++
++  /// Couldn't tell (offline, timeout, 5xx). The session may still be valid.
++  unavailable,
++}
++
+ class ApiClient {
+   ApiClient._internal() {
+     _dio = Dio(
+@@ -30,12 +41,20 @@ class ApiClient {
+         },
+         onError: (error, handler) async {
+           final status = error.response?.statusCode;
+-          final isAuthError = status == 401;
++          final path = error.requestOptions.path;
+           final alreadyRetried = error.requestOptions.extra['authRetried'] == true;
+ 
+-          if (isAuthError && !alreadyRetried) {
+-            final refreshed = await _tryRefresh();
+-            if (refreshed) {
++          // A 401 from the credential endpoints means "wrong email/password" or
++          // "bad refresh token", not "access token expired" -- never try to
++          // refresh for those, and let the caller see the real response.
++          final isCredentialEndpoint = path.contains('/auth/login') ||
++              path.contains('/auth/token') ||
++              path.contains('/auth/refresh');
++
++          if (status == 401 && !alreadyRetried && !isCredentialEndpoint) {
++            final result = await _refreshOnce();
++
++            if (result == _RefreshResult.refreshed) {
+               final request = error.requestOptions;
+               request.extra['authRetried'] = true;
+               final token = await TokenStorage.instance.getAccessToken();
+@@ -43,19 +62,24 @@ class ApiClient {
+               try {
+                 final response = await _dio.fetch(request);
+                 return handler.resolve(response);
+-              } catch (_) {
+-                return handler.next(error);
++              } on DioException catch (retryError) {
++                return handler.next(retryError);
+               }
+             }
+ 
+-            await TokenStorage.instance.clear();
+-            return handler.reject(
+-              DioException(
+-                requestOptions: error.requestOptions,
+-                error: SessionExpiredException(),
+-                type: DioExceptionType.badResponse,
+-              ),
+-            );
++            if (result == _RefreshResult.rejected) {
++              await TokenStorage.instance.clear();
++              return handler.reject(
++                DioException(
++                  requestOptions: error.requestOptions,
++                  // Keep the response so callers can still read the status code.
++                  response: error.response,
++                  error: SessionExpiredException(),
++                  type: DioExceptionType.badResponse,
++                ),
++              );
++            }
++            // unavailable: keep the stored session and surface the original 401.
+           }
+ 
+           handler.next(error);
+@@ -91,9 +115,24 @@ class ApiClient {
+     Error.throwWithStackTrace(lastError ?? StateError('Request failed'), lastStack ?? StackTrace.current);
+   }
+ 
+-  Future<bool> _tryRefresh() async {
++  /// Single-flight refresh. The backend rotates refresh tokens and treats a
++  /// reused one as theft (it revokes the whole chain), so when several requests
++  /// get a 401 at once they must share ONE refresh call -- otherwise the second
++  /// call replays an already-rotated token and logs the user out.
++  Future<_RefreshResult>? _refreshInFlight;
++
++  Future<_RefreshResult> _refreshOnce() {
++    final inFlight = _refreshInFlight;
++    if (inFlight != null) return inFlight;
++
++    final future = _tryRefresh().whenComplete(() => _refreshInFlight = null);
++    _refreshInFlight = future;
++    return future;
++  }
++
++  Future<_RefreshResult> _tryRefresh() async {
+     final refreshToken = await TokenStorage.instance.getRefreshToken();
+-    if (refreshToken == null) return false;
++    if (refreshToken == null) return _RefreshResult.rejected;
+ 
+     try {
+       final response = await Dio(
+@@ -109,9 +148,13 @@ class ApiClient {
+         accessToken: data['access_token'] as String,
+         refreshToken: data['refresh_token'] as String,
+       );
+-      return true;
++      return _RefreshResult.refreshed;
++    } on DioException catch (e) {
++      final status = e.response?.statusCode;
++      if (status == 401 || status == 403) return _RefreshResult.rejected;
++      return _RefreshResult.unavailable;
+     } catch (_) {
+-      return false;
++      return _RefreshResult.unavailable;
+     }
+   }
+ }
+diff --git a/assetflow_mobile/lib/core/outbox_repository.dart b/assetflow_mobile/lib/core/outbox_repository.dart
+index 3e30182..7086681 100644
+--- a/assetflow_mobile/lib/core/outbox_repository.dart
++++ b/assetflow_mobile/lib/core/outbox_repository.dart
+@@ -11,6 +11,7 @@ class OutboxEntry {
+   final String idempotencyKey;
+   final String status;
+   final int attemptCount;
++  final String clientCreatedAt;
+ 
+   OutboxEntry({
+     required this.id,
+@@ -19,6 +20,7 @@ class OutboxEntry {
+     required this.idempotencyKey,
+     required this.status,
+     required this.attemptCount,
++    required this.clientCreatedAt,
+   });
+ 
+   factory OutboxEntry.fromRow(Map<String, dynamic> row) => OutboxEntry(
+@@ -28,6 +30,7 @@ class OutboxEntry {
+         idempotencyKey: row['idempotency_key'] as String,
+         status: row['status'] as String,
+         attemptCount: row['attempt_count'] as int,
++        clientCreatedAt: row['client_created_at'] as String,
+       );
+ }
+ 
+@@ -39,6 +42,11 @@ class OutboxRepository {
+   OutboxRepository._();
+   static final OutboxRepository instance = OutboxRepository._();
+ 
++  /// A rejected entry is retried on later syncs, but only this many times;
++  /// after that it stays 'failed' for the user to look at instead of being
++  /// re-sent forever.
++  static const maxAttempts = 5;
++
+   final _uuid = const Uuid();
+ 
+   Future<String> enqueue({
+@@ -66,7 +74,12 @@ class OutboxRepository {
+ 
+   Future<List<OutboxEntry>> pendingEntries() async {
+     final db = await LocalDatabase.instance.database;
+-    final rows = await db.query('outbox', where: "status IN ('pending', 'failed')", orderBy: 'client_created_at ASC');
++    final rows = await db.query(
++      'outbox',
++      where: "status = 'pending' OR (status = 'failed' AND attempt_count < ?)",
++      whereArgs: [maxAttempts],
++      orderBy: 'client_created_at ASC',
++    );
+     return rows.map(OutboxEntry.fromRow).toList();
+   }
+ 
+@@ -83,10 +96,12 @@ class OutboxRepository {
+     );
+   }
+ 
++  /// Entries that have never been attempted. Used to decide whether another
++  /// batch is needed right now -- rejected ones wait for the next sync trigger.
+   Future<int> pendingCount() async {
+     final db = await LocalDatabase.instance.database;
+     final result = await db.rawQuery(
+-      "SELECT COUNT(*) as c FROM outbox WHERE status IN ('pending', 'failed')",
++      "SELECT COUNT(*) as c FROM outbox WHERE status = 'pending'",
+     );
+     if (result.isEmpty) return 0;
+     final value = result.first['c'];
+diff --git a/assetflow_mobile/lib/core/sync_service.dart b/assetflow_mobile/lib/core/sync_service.dart
+index 99c7093..5319f9b 100644
+--- a/assetflow_mobile/lib/core/sync_service.dart
++++ b/assetflow_mobile/lib/core/sync_service.dart
+@@ -38,7 +38,22 @@ class SyncService {
+     _statusController.close();
+   }
+ 
++  bool _pushing = false;
++
+   Future<void> pushOutbox({int attempt = 0}) async {
++    // A connectivity event and a manual push can overlap; two concurrent runs
++    // would send the same entries twice (the server dedupes, but it's wasted
++    // work and racy local status updates).
++    if (_pushing) return;
++    _pushing = true;
++    try {
++      await _pushOutboxLocked(attempt: attempt);
++    } finally {
++      _pushing = false;
++    }
++  }
++
++  Future<void> _pushOutboxLocked({required int attempt}) async {
+     final pending = await OutboxRepository.instance.pendingEntries();
+     if (pending.isEmpty) return;
+ 
+@@ -49,7 +64,8 @@ class SyncService {
+       final items = batch
+           .map((entry) => {
+                 'entity_type': entry.entityType,
+-                'client_created_at': DateTime.now().toIso8601String(),
++                // when the user actually recorded it, not when it was synced
++                'client_created_at': entry.clientCreatedAt,
+                 'payload': entry.payload,
+               })
+           .toList();
+@@ -69,10 +85,13 @@ class SyncService {
+ 
+       await pullSince();
+ 
+-      // More left in the outbox (batch was capped) -- keep draining.
++      // More never-attempted entries left (batch was capped) -- keep draining.
++      // Entries the server rejected are NOT counted here: they are already
++      // marked failed and must wait for the next sync trigger, otherwise a
++      // single bad entry would be re-sent in a tight loop.
+       final remaining = await OutboxRepository.instance.pendingCount();
+       if (remaining > 0) {
+-        await pushOutbox();
++        await _pushOutboxLocked(attempt: 0);
+       } else {
+         _statusController.add(SyncStatus.idle);
+       }
+@@ -90,7 +109,7 @@ class SyncService {
+   /// so device/server time drift can't cause missed records.
+   Future<void> pullSince() async {
+     final lastSync = await LocalDatabase.instance.getMeta('last_sync_watermark') ??
+-        DateTime.now().subtract(const Duration(days: 30)).toIso8601String();
++        DateTime.now().toUtc().subtract(const Duration(days: 30)).toIso8601String();
+ 
+     try {
+       final response = await ApiClient.instance.dio.get('/sync/pull', queryParameters: {'since': lastSync});
+diff --git a/assetflow_mobile/lib/models/models.dart b/assetflow_mobile/lib/models/models.dart
+index 944f768..c85b625 100644
+--- a/assetflow_mobile/lib/models/models.dart
++++ b/assetflow_mobile/lib/models/models.dart
+@@ -103,6 +103,11 @@ class Vehicle {
+   final String? driverName;
+   final double mileage;
+   final String status;
++  final double? purchasePrice;
++  final double? currentValue;
++
++  /// 'VEHICLES' or 'MACHINES' (BusinessCategory.code from the backend).
++  final String? categoryCode;
+ 
+   Vehicle({
+     required this.id,
+@@ -113,8 +118,14 @@ class Vehicle {
+     this.driverName,
+     required this.mileage,
+     required this.status,
++    this.purchasePrice,
++    this.currentValue,
++    this.categoryCode,
+   });
+ 
++  /// Best available worth of this asset: current value, else what it cost.
++  double get assetValue => currentValue ?? purchasePrice ?? 0;
++
+   factory Vehicle.fromJson(Map<String, dynamic> json) => Vehicle(
+         id: json['id'] as String,
+         businessUnitId: json['business_unit_id'] as String,
+@@ -124,6 +135,9 @@ class Vehicle {
+         driverName: json['driver_name'] as String?,
+         mileage: (json['mileage'] as num).toDouble(),
+         status: json['status'] as String,
++        purchasePrice: (json['purchase_price'] as num?)?.toDouble(),
++        currentValue: (json['current_value'] as num?)?.toDouble(),
++        categoryCode: json['category_code'] as String?,
+       );
+ }
+ 
+diff --git a/assetflow_mobile/lib/screens/dashboard/dashboard_screen.dart b/assetflow_mobile/lib/screens/dashboard/dashboard_screen.dart
+index 884390f..7a9f517 100644
+--- a/assetflow_mobile/lib/screens/dashboard/dashboard_screen.dart
++++ b/assetflow_mobile/lib/screens/dashboard/dashboard_screen.dart
+@@ -63,8 +63,8 @@ class _HomeContent extends StatelessWidget {
+     final machineVehicles = data.vehicles.where(_looksLikeMachine).toList();
+     final roadVehicles = data.vehicles.where((v) => !_looksLikeMachine(v)).toList();
+ 
+-    final machineValue = machineVehicles.fold<double>(0, (sum, v) => sum + (0));
+-    final roadVehicleValue = roadVehicles.fold<double>(0, (sum, v) => sum + (0));
++    final machineValue = machineVehicles.fold<double>(0, (sum, v) => sum + v.assetValue);
++    final roadVehicleValue = roadVehicles.fold<double>(0, (sum, v) => sum + v.assetValue);
+     final propertyValue = data.properties.fold<double>(0, (sum, p) => sum + p.monthlyRent * 12);
+     final shopValue = data.products.fold<double>(0, (sum, p) => sum + p.stockValue);
+     final projectValue = data.project?.totalInvestment ?? 0;
+@@ -143,6 +143,9 @@ class _HomeContent extends StatelessWidget {
+ );
+ }
+   bool _looksLikeMachine(Vehicle v) {
++    // The backend's category is authoritative; the name/type heuristic only
++    // covers responses that predate category_code.
++    if (v.categoryCode != null) return v.categoryCode == 'MACHINES';
+     final name = v.name.toUpperCase();
+     final type = (v.vehicleType ?? '').toUpperCase();
+     return name.startsWith('EX-') || type.contains('EXCAV') || type.contains('MACHINE');
+diff --git a/assetflow_mobile/lib/state/auth_provider.dart b/assetflow_mobile/lib/state/auth_provider.dart
+index 2aa6d89..3f70af7 100644
+--- a/assetflow_mobile/lib/state/auth_provider.dart
++++ b/assetflow_mobile/lib/state/auth_provider.dart
+@@ -43,8 +43,15 @@ class AuthNotifier extends StateNotifier<AuthState> {
+       final response = await ApiClient.instance.dio.get('/auth/me');
+       state = AuthState.authenticated(CurrentUser.fromJson(response.data as Map<String, dynamic>));
+       SyncService.instance.start();
++    } on DioException catch (e) {
++      // Only discard the stored session when the server says it is invalid.
++      // Opening the app offline (or during a Render cold start) must not
++      // sign the user out and delete their refresh token.
++      if (e.response?.statusCode == 401 || e.error is SessionExpiredException) {
++        await TokenStorage.instance.clear();
++      }
++      state = const AuthState.unauthenticated();
+     } catch (_) {
+-      await TokenStorage.instance.clear();
+       state = const AuthState.unauthenticated();
+     }
+   }
