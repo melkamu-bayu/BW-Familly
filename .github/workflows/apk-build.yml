@@ -40,6 +40,35 @@ jobs:
           flutter --version
           dart --version
 
+      # Add Maven Central to the Flutter SDK's own Gradle plugin repositories.
+      - name: Configure Flutter Gradle plugin repositories
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SETTINGS="$FLUTTER_ROOT/packages/flutter_tools/gradle/settings.gradle.kts"
+
+          test -f "$SETTINGS"
+
+          if ! grep -q '^pluginManagement' "$SETTINGS"; then
+            TEMP_SETTINGS="$(mktemp)"
+            cat > "$TEMP_SETTINGS" <<'EOF'
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+EOF
+            cat "$SETTINGS" >> "$TEMP_SETTINGS"
+            mv "$TEMP_SETTINGS" "$SETTINGS"
+          fi
+
+          echo "Flutter Gradle plugin repositories:"
+          sed -n '1,18p' "$SETTINGS"
+
       # ============================================================
       # 3. VERIFY THE PERMANENT NEW MOBILE APPLICATION
       # ============================================================
