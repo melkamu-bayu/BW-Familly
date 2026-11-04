@@ -1,0 +1,10 @@
+.git/
+.venv/
+.venv-workers/
+cloudflare-scaffold/
+app.before-cloudflare-src/
+tests/
+__pycache__/
+*.pyc
+*.before-*
+*.code-only-backup

@@ -7,3 +7,15 @@ venv/
 .env
 *.egg-info/
 .DS_Store
+
+# Cloudflare Workers
+.wrangler/
+.dev.vars
+.dev.vars.*
+node_modules/
+dist/
+
+.venv-workers/
+python_modules/
+*.bak
+*.before-*
