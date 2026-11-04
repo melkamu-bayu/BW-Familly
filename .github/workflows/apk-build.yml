@@ -11,7 +11,7 @@ permissions:
 
 env:
   FLUTTER_VERSION: "3.35.7"
-  API_BASE_URL: "https://assetflow-api-f435.onrender.com/api/v1"
+  API_BASE_URL: "https://assetflow-api.melkamubayu2.workers.dev/api/v1"
 
 jobs:
   build-apk:
@@ -216,129 +216,26 @@ jobs:
           echo "Internet permission OK."
 
       # ============================================================
-      # 8. VERIFY BACKEND
+      # 8. CHECK BACKEND (non-blocking)
       # ============================================================
       - name: Check production API
         shell: bash
         run: |
-          set -euo pipefail
-
-          DOCS_URL="https://assetflow-api-f435.onrender.com/docs"
-
-          echo "Checking:"
-          echo "$DOCS_URL"
-
-          HTTP_CODE=$(curl \
-            --location \
-            --silent \
-            --show-error \
-            --output /dev/null \
-            --write-out "%{http_code}" \
-            --connect-timeout 20 \
-            --max-time 60 \
-            "$DOCS_URL")
-
-          echo "HTTP status: $HTTP_CODE"
-
+          # Informational only. Cloudflare API availability check.
+          # An APK build must not fail
+          # just because the API health check fails.
+          DOCS_URL="https://assetflow-api.melkamubayu2.workers.dev/docs"
+          for attempt in 1 2 3; do
+            HTTP_CODE=$(curl --location --silent --output /dev/null \
+              --write-out "%{http_code}" --connect-timeout 20 --max-time 90 \
+              "$DOCS_URL" || true)
+            echo "Attempt $attempt: HTTP $HTTP_CODE"
+            [ "$HTTP_CODE" = "200" ] && break
+            sleep 10
+          done
           if [ "$HTTP_CODE" != "200" ]; then
-            echo "ERROR: Production backend is not reachable."
-            exit 1
+            echo "::warning::Production API did not return 200 (got $HTTP_CODE). Building the APK anyway."
           fi
-
-          echo "Production backend is reachable."
-
-      # ============================================================
-      # 9. FORCE PRODUCTION API CONFIGURATION
-      # ============================================================
-      - name: Configure production API
-        working-directory: assetflow_mobile
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          mkdir -p lib/core
-
-          cat > lib/core/config.dart <<'DART'
-          class AppConfig {
-            AppConfig._();
-
-            static const String apiBaseUrl = String.fromEnvironment(
-              'API_BASE_URL',
-              defaultValue:
-                  'https://assetflow-api-f435.onrender.com/api/v1',
-            );
-
-            static const String defaultCurrency = 'ETB';
-
-            static const Duration idleLockTimeout =
-                Duration(minutes: 15);
-          }
-          DART
-
-          echo "Production API configuration created."
-
-          cat lib/core/config.dart
-
-      # ============================================================
-      # 10. FIX NEW UI COMPATIBILITY ISSUES
-      # ============================================================
-      - name: Fix new UI Dart compatibility
-        working-directory: assetflow_mobile
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          python3 - <<'PY'
-          from pathlib import Path
-
-          router = Path("lib/router.dart")
-
-          if router.exists():
-              text = router.read_text()
-
-              text = text.replace(
-                  "=> const LoginScreen()",
-                  "=> LoginScreen()"
-              )
-
-              router.write_text(text)
-
-              print("router.dart checked/fixed.")
-
-          dashboard = Path(
-              "lib/screens/dashboard/dashboard_screen.dart"
-          )
-
-          if dashboard.exists():
-              text = dashboard.read_text()
-
-              replacements = [
-                  "machineVehicles.fold<double>(0, (sum, v) => sum + (v.currentValue ?? v.purchasePrice ?? 0))",
-                  "roadVehicles.fold<double>(0, (sum, v) => sum + (v.currentValue ?? v.purchasePrice ?? 0))",
-                  "vehicles.fold<double>(0, (sum, v) => sum + (v.currentValue ?? v.purchasePrice ?? 0))",
-                  "vehicle.currentValue - vehicle.purchasePrice",
-                  "vehicle.currentValue",
-                  "vehicle.purchasePrice",
-                  "vehicles[index].currentValue - vehicles[index].purchasePrice",
-                  "vehicles[index].currentValue",
-                  "vehicles[index].purchasePrice",
-              ]
-
-              for old in replacements:
-                  text = text.replace(old, "0.0")
-
-              dashboard.write_text(text)
-
-              print("dashboard_screen.dart checked/fixed.")
-
-          widget_test = Path("test/widget_test.dart")
-
-          if widget_test.exists():
-              widget_test.unlink()
-              print("Removed obsolete widget_test.dart.")
-          PY
-
-          echo "Dart compatibility fixes completed."
 
       # ============================================================
       # 11. FLUTTER CLEAN

@@ -6,7 +6,7 @@ class AppConfig {
   /// --dart-define=API_BASE_URL=https://example.com/api/v1
   static const String apiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'https://assetflow-api-f435.onrender.com/api/v1',
+    defaultValue: 'https://assetflow-api.melkamubayu2.workers.dev/api/v1',
   );
 
   static const String defaultCurrency = 'ETB';
